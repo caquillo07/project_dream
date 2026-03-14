@@ -1,7 +1,7 @@
 # Sprint: Foundation — Sprite in a 3D World
 
 **Started:** 2026-03-13
-**Status:** Not Started
+**Status:** In Progress
 
 ## Goal
 
@@ -22,12 +22,14 @@ the project's architecture.
 ## Phases
 
 ### Phase 1 — Platform Layer
-- [ ] SDL3 init (window, GPU device, event loop)
-- [ ] Frame timing (dt calculation)
-- [ ] Input gathering (keyboard state, per-frame pressed/released)
-- [ ] Shader loading (SPIR-V via SDL_gpu_shadercross)
-- [ ] justfile with build + shader compilation commands
-- [ ] Basic render loop (clear screen, present)
+- [x] SDL3 init (window, GPU device, event loop)
+- [x] Frame timing (dt calculation, Debug_Timing struct)
+- [x] Input gathering (Game_Input struct, per-frame pressed/released)
+- [x] Shader loading (GLSL -> SPIR-V -> Metal -> metallib build pipeline)
+- [x] justfile with build + shader compilation commands
+- [x] Basic render loop (clear screen, present)
+- [x] Memory arenas (permanent + scratch, growable, virtual memory backed)
+- [x] Hello triangle (proved full GPU pipeline end-to-end)
 
 ### Phase 2 — Mesh Pipeline + Ground Plane
 - [ ] Vertex format for 3D geometry (position, UV, normal)
@@ -70,10 +72,10 @@ the project's architecture.
 ## Current Status
 
 **Completed:**
-- (none yet)
+- Phase 1 — Platform Layer
 
 **In Progress:**
-- (not started)
+- Phase 2 — Mesh Pipeline + Ground Plane
 
 **Blocked:**
 - (none)
@@ -81,7 +83,11 @@ the project's architecture.
 ---
 
 ## Learnings
-- (captured as we go)
+- spirv-cross renames `main` to `main0` in Metal output — use `"main0"` as shader entrypoint
+- `os.read_entire_file` in Odin dev-2026-03 requires explicit allocator parameter
+- `sdl.SubmitGPUCommandBuffer` returns bool — must handle it or Odin errors
+- Always submit command buffer before `continue` to avoid GPU resource leaks
+- `context.temp_allocator` defaults to a hidden allocator we don't control — set it to our scratch arena
 
 ---
 

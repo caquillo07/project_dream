@@ -16,6 +16,28 @@ Vertex :: struct {
 	color:    [3]f32,
 }
 
+Button_State :: struct {
+	is_down:  bool, // held down right now
+	pressed:  bool, // went down this frame
+	released: bool, // went up this frame
+}
+
+Game_Input :: struct {
+	move_up:    Button_State,
+	move_down:  Button_State,
+	move_left:  Button_State,
+	move_right: Button_State,
+	action_a:   Button_State, // confirm / interact
+	action_b:   Button_State, // cancel / back
+	dt:         f32,
+}
+
+Debug_Timing :: struct {
+	dt:       f32, // seconds
+	fps:      f32,
+	frame_ms: f32,
+}
+
 main :: proc() {
 	context.logger = log.create_console_logger()
 	defer log.destroy_console_logger(context.logger)
@@ -139,9 +161,26 @@ main :: proc() {
 	_ = sdl.SubmitGPUCommandBuffer(upload_cmd)
 	sdl.ReleaseGPUTransferBuffer(device, transfer_buf)
 
+	// Frame timing
+	perf_freq := sdl.GetPerformanceFrequency()
+	last_counter := sdl.GetPerformanceCounter()
+
+	// Input state
+	input: Game_Input
+	debug_timing: Debug_Timing
+
 	// Main loop
 	running := true
 	for running {
+		// Measure frame time
+		now := sdl.GetPerformanceCounter()
+		input.dt = f32(now - last_counter) / f32(perf_freq)
+		last_counter = now
+
+		debug_timing.dt = input.dt
+		debug_timing.frame_ms = input.dt * 1000.0
+		debug_timing.fps = input.dt > 0 ? 1.0 / input.dt : 0
+
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
@@ -154,6 +193,23 @@ main :: proc() {
 				}
 			}
 		}
+
+		// Gather input from keyboard state
+		gather_input(&input)
+
+		// Debug: log input state changes
+		if input.move_up.pressed    do log.infof("UP pressed")
+		if input.move_up.released   do log.infof("UP released")
+		if input.move_down.pressed  do log.infof("DOWN pressed")
+		if input.move_down.released do log.infof("DOWN released")
+		if input.move_left.pressed  do log.infof("LEFT pressed")
+		if input.move_left.released do log.infof("LEFT released")
+		if input.move_right.pressed  do log.infof("RIGHT pressed")
+		if input.move_right.released do log.infof("RIGHT released")
+		if input.action_a.pressed   do log.infof("ACTION_A pressed")
+		if input.action_a.released  do log.infof("ACTION_A released")
+		if input.action_b.pressed   do log.infof("ACTION_B pressed")
+		if input.action_b.released  do log.infof("ACTION_B released")
 
 		// Acquire command buffer
 		cmd := sdl.AcquireGPUCommandBuffer(device)
@@ -253,6 +309,24 @@ load_shader :: proc(
 		panic("shader creation failed")
 	}
 	return shader
+}
+
+update_button :: proc(button: ^Button_State, is_down: bool) {
+	was_down := button.is_down
+	button.is_down = is_down
+	button.pressed = is_down && !was_down
+	button.released = !is_down && was_down
+}
+
+gather_input :: proc(input: ^Game_Input) {
+	keyboard := sdl.GetKeyboardState(nil)
+
+	update_button(&input.move_up, keyboard[sdl.Scancode.W])
+	update_button(&input.move_down, keyboard[sdl.Scancode.S])
+	update_button(&input.move_left, keyboard[sdl.Scancode.A])
+	update_button(&input.move_right, keyboard[sdl.Scancode.D])
+	update_button(&input.action_a, keyboard[sdl.Scancode.SPACE])
+	update_button(&input.action_b, keyboard[sdl.Scancode.E])
 }
 
 format_bytes :: proc(bytes: uint) -> string {
