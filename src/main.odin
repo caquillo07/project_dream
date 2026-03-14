@@ -457,7 +457,7 @@ main :: proc() {
 		debug_timing.fps = input.dt > 0 ? 1.0 / input.dt : 0
 
 		// Accumulate timing samples, update title periodically
-		title_accumulator += input.dt
+		title_accumulator += debug_timing.dt
 		title_frame_count += 1
 		title_ms_sum += debug_timing.frame_ms
 		title_ms_min = min(title_ms_min, debug_timing.frame_ms)
@@ -532,6 +532,34 @@ main :: proc() {
 					debug_cam.yaw += event.motion.xrel * MOUSE_SENSITIVITY
 					debug_cam.pitch -= event.motion.yrel * MOUSE_SENSITIVITY
 					debug_cam.pitch = clamp(debug_cam.pitch, -85.0 * math.RAD_PER_DEG, 85.0 * math.RAD_PER_DEG)
+				}
+			case .WINDOW_PIXEL_SIZE_CHANGED:
+				log.info("changed pixel")
+				new_w := u32(event.window.data1)
+				new_h := u32(event.window.data2)
+				if new_w > 0 && new_h > 0 {
+					sdl.ReleaseGPUTexture(device, depth_texture)
+					depth_texture = sdl.CreateGPUTexture(
+						device,
+						sdl.GPUTextureCreateInfo {
+							type = .D2,
+							format = .D32_FLOAT,
+							width = new_w,
+							height = new_h,
+							layer_count_or_depth = 1,
+							num_levels = 1,
+							usage = {.DEPTH_STENCIL_TARGET},
+						},
+					)
+					if depth_texture == nil {
+						log_sdl_fatal("Failed to recreate depth texture on resize")
+					}
+					proj = linalg.matrix4_perspective_f32(
+						math.to_radians(f32(45.0)),
+						f32(new_w) / f32(new_h),
+						0.1,
+						100.0,
+					)
 				}
 			}
 		}
@@ -735,7 +763,7 @@ gather_input :: proc(input: ^Game_Input) {
 	update_button(&input.move_left, keyboard[sdl.Scancode.A])
 	update_button(&input.move_right, keyboard[sdl.Scancode.D])
 	update_button(&input.action_a, keyboard[sdl.Scancode.SPACE])
-	update_button(&input.action_b, keyboard[sdl.Scancode.E])
+	update_button(&input.action_b, keyboard[sdl.Scancode.E]) // TODO: conflicts with debug camera fly-up (E/Q) — resolve when game actions are wired
 }
 
 format_bytes :: proc(bytes: uint) -> string {
