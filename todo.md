@@ -39,11 +39,11 @@ the project's architecture.
 - [x] Textured ground visible on screen
 
 ### Phase 3 — 3D Camera
-- [ ] Camera struct (target, distance, fixed pitch — HGSS/Link's Awakening style)
-- [ ] View-projection computed per frame from camera state
-- [ ] Scroll wheel zoom (clamped min/max)
-- [ ] Temporary WASD target panning (replaced by player follow in Phase 5)
-- [ ] Debug free camera (F1 toggle, save/restore follow camera, mouse look, WASD fly)
+- [x] Camera struct (target, distance, fixed pitch — HGSS/Link's Awakening style)
+- [x] View-projection computed per frame from camera state
+- [x] Scroll wheel zoom (clamped min/max)
+- [x] Temporary WASD target panning (replaced by player follow in Phase 5)
+- [x] Debug free camera (F1 toggle, save/restore follow camera, mouse look, WASD+E/Q fly)
 
 ### Phase 4 — Sprite Pipeline + Billboard
 - [ ] Sprite vertex shader (generate quad from vertex index, billboard math)
@@ -74,9 +74,10 @@ the project's architecture.
 **Completed:**
 - Phase 1 — Platform Layer
 - Phase 2 — Mesh Pipeline + Ground Plane
+- Phase 3 — 3D Camera
 
 **In Progress:**
-- Phase 3 — 3D Camera
+- Phase 4 — Sprite Pipeline + Billboard
 
 **Blocked:**
 - (none)
@@ -89,6 +90,8 @@ the project's architecture.
 - `sdl.SubmitGPUCommandBuffer` returns bool — must handle it or Odin errors
 - Always submit command buffer before `continue` to avoid GPU resource leaks
 - `context.temp_allocator` defaults to a hidden allocator we don't control — set it to our scratch arena
+- `sdl.SetWindowRelativeMouseMode` returns bool — must handle with `_ =`
+- Follow camera: position derived from target + spherical offset (distance * sin/cos pitch) — don't store position directly
 
 ---
 
