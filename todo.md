@@ -32,11 +32,11 @@ the project's architecture.
 - [x] Hello triangle (proved full GPU pipeline end-to-end)
 
 ### Phase 2 — Mesh Pipeline + Ground Plane
-- [ ] Vertex format for 3D geometry (position, UV, normal)
-- [ ] Mesh pipeline (vertex shader, fragment shader, depth test)
-- [ ] Hardcoded ground plane (flat quad or grid of quads)
-- [ ] Basic texture loading (stb_image or SDL3 image loading)
-- [ ] Textured ground visible on screen
+- [x] Vertex format for 3D geometry (position, UV, normal)
+- [x] Mesh pipeline (vertex shader, fragment shader, depth test)
+- [x] Hardcoded ground plane (flat quad or grid of quads)
+- [x] Procedural checkerboard texture (stb_image deferred to Phase 4)
+- [x] Textured ground visible on screen
 
 ### Phase 3 — 3D Camera
 - [ ] Perspective projection matrix
@@ -73,9 +73,10 @@ the project's architecture.
 
 **Completed:**
 - Phase 1 — Platform Layer
+- Phase 2 — Mesh Pipeline + Ground Plane
 
 **In Progress:**
-- Phase 2 — Mesh Pipeline + Ground Plane
+- Phase 3 — 3D Camera
 
 **Blocked:**
 - (none)

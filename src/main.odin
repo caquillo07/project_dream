@@ -3,6 +3,8 @@ package main
 import intrinsics "base:intrinsics"
 import "core:fmt"
 import "core:log"
+import "core:math"
+import linalg "core:math/linalg"
 import "core:mem"
 import vmem "core:mem/virtual"
 import "core:os"
@@ -11,9 +13,15 @@ import sdl "vendor:sdl3"
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
 
-Vertex :: struct {
+Mesh_Vertex :: struct {
 	position: [3]f32,
-	color:    [3]f32,
+	uv:       [2]f32,
+	normal:   [3]f32,
+}
+
+Mesh_Uniforms :: struct {
+	view_proj: matrix[4, 4]f32,
+	model:     matrix[4, 4]f32,
 }
 
 Button_State :: struct {
@@ -92,14 +100,15 @@ main :: proc() {
 	// Load shaders (into scratch — bytes only needed until CreateGPUShader copies them)
 	swapchain_format := sdl.GetGPUSwapchainTextureFormat(device, window)
 
-	vert_shader := load_shader(device, "build/shaders/triangle.vert.metallib", .VERTEX, 0, 0, scratch_allocator)
-	frag_shader := load_shader(device, "build/shaders/triangle.frag.metallib", .FRAGMENT, 0, 0, scratch_allocator)
+	vert_shader := load_shader(device, "build/shaders/mesh.vert.metallib", .VERTEX, 1, 0, scratch_allocator)
+	frag_shader := load_shader(device, "build/shaders/mesh.frag.metallib", .FRAGMENT, 0, 1, scratch_allocator)
 
-	// Create graphics pipeline
-	vbuf_descs := [1]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Vertex), input_rate = .VERTEX}}
-	vert_attrs := [2]sdl.GPUVertexAttribute {
-		{location = 0, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Vertex, position))},
-		{location = 1, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Vertex, color))},
+	// Create mesh pipeline
+	vbuf_descs := [1]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Mesh_Vertex), input_rate = .VERTEX}}
+	vert_attrs := [3]sdl.GPUVertexAttribute {
+		{location = 0, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, position))},
+		{location = 1, buffer_slot = 0, format = .FLOAT2, offset = u32(offset_of(Mesh_Vertex, uv))},
+		{location = 2, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, normal))},
 	}
 	color_target_descs := [1]sdl.GPUColorTargetDescription{{format = swapchain_format}}
 
@@ -112,11 +121,21 @@ main :: proc() {
 				vertex_buffer_descriptions = raw_data(&vbuf_descs),
 				num_vertex_buffers = 1,
 				vertex_attributes = raw_data(&vert_attrs),
-				num_vertex_attributes = 2,
+				num_vertex_attributes = 3,
 			},
 			primitive_type = .TRIANGLELIST,
-			rasterizer_state = {fill_mode = .FILL, cull_mode = .NONE},
-			target_info = {color_target_descriptions = raw_data(&color_target_descs), num_color_targets = 1},
+			rasterizer_state = {fill_mode = .FILL, cull_mode = .BACK, front_face = .COUNTER_CLOCKWISE},
+			depth_stencil_state = {
+				compare_op = .LESS_OR_EQUAL,
+				enable_depth_test = true,
+				enable_depth_write = true,
+			},
+			target_info = {
+				color_target_descriptions = raw_data(&color_target_descs),
+				num_color_targets = 1,
+				depth_stencil_format = .D32_FLOAT,
+				has_depth_stencil_target = true,
+			},
 		},
 	)
 	if pipeline == nil {
@@ -127,39 +146,140 @@ main :: proc() {
 	sdl.ReleaseGPUShader(device, vert_shader)
 	sdl.ReleaseGPUShader(device, frag_shader)
 
-	// Create vertex buffer and upload triangle data
-	vertices := [3]Vertex {
-		{{0.0, 0.5, 0.0}, {1.0, 0.0, 0.0}}, // top — red
-		{{-0.5, -0.5, 0.0}, {0.0, 1.0, 0.0}}, // bottom-left — green
-		{{0.5, -0.5, 0.0}, {0.0, 0.0, 1.0}}, // bottom-right — blue
+	// Depth buffer
+	depth_texture := sdl.CreateGPUTexture(
+		device,
+		sdl.GPUTextureCreateInfo {
+			type = .D2,
+			format = .D32_FLOAT,
+			width = WINDOW_WIDTH,
+			height = WINDOW_HEIGHT,
+			layer_count_or_depth = 1,
+			num_levels = 1,
+			usage = {.DEPTH_STENCIL_TARGET},
+		},
+	)
+	if depth_texture == nil {
+		log_sdl_fatal("Failed to create depth texture")
+	}
+	defer sdl.ReleaseGPUTexture(device, depth_texture)
+
+	// Procedural checkerboard texture
+	CHECKER_SIZE :: 64
+	TILE_SIZE :: 8
+	checker_pixels: [CHECKER_SIZE * CHECKER_SIZE * 4]u8
+	for y in 0 ..< CHECKER_SIZE {
+		for x in 0 ..< CHECKER_SIZE {
+			is_white := ((x / TILE_SIZE) + (y / TILE_SIZE)) % 2 == 0
+			color: u8 = is_white ? 200 : 80
+			i := (y * CHECKER_SIZE + x) * 4
+			checker_pixels[i + 0] = color // R
+			checker_pixels[i + 1] = color // G
+			checker_pixels[i + 2] = color // B
+			checker_pixels[i + 3] = 255 // A
+		}
 	}
 
-	vertex_buffer := sdl.CreateGPUBuffer(device, sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = size_of(vertices)})
+	ground_texture := sdl.CreateGPUTexture(
+		device,
+		sdl.GPUTextureCreateInfo {
+			type = .D2,
+			format = .R8G8B8A8_UNORM,
+			width = CHECKER_SIZE,
+			height = CHECKER_SIZE,
+			layer_count_or_depth = 1,
+			num_levels = 1,
+			usage = {.SAMPLER},
+		},
+	)
+	if ground_texture == nil {
+		log_sdl_fatal("Failed to create ground texture")
+	}
+	defer sdl.ReleaseGPUTexture(device, ground_texture)
+
+	sampler := sdl.CreateGPUSampler(
+		device,
+		sdl.GPUSamplerCreateInfo {
+			min_filter = .NEAREST,
+			mag_filter = .NEAREST,
+			address_mode_u = .REPEAT,
+			address_mode_v = .REPEAT,
+		},
+	)
+	if sampler == nil {
+		log_sdl_fatal("Failed to create sampler")
+	}
+	defer sdl.ReleaseGPUSampler(device, sampler)
+
+	// Ground quad — 6 vertices on XZ plane at Y=0
+	GROUND_HALF :: f32(10.0)
+	UV_TILES :: f32(5.0) // how many times the checkerboard repeats
+	ground_verts := [6]Mesh_Vertex {
+		// Triangle 1 (CCW when viewed from above: +Y)
+		{{-GROUND_HALF, 0, -GROUND_HALF}, {0, 0}, {0, 1, 0}},
+		{{-GROUND_HALF, 0, GROUND_HALF}, {0, UV_TILES}, {0, 1, 0}},
+		{{GROUND_HALF, 0, GROUND_HALF}, {UV_TILES, UV_TILES}, {0, 1, 0}},
+		// Triangle 2
+		{{-GROUND_HALF, 0, -GROUND_HALF}, {0, 0}, {0, 1, 0}},
+		{{GROUND_HALF, 0, GROUND_HALF}, {UV_TILES, UV_TILES}, {0, 1, 0}},
+		{{GROUND_HALF, 0, -GROUND_HALF}, {UV_TILES, 0}, {0, 1, 0}},
+	}
+
+	vertex_buffer := sdl.CreateGPUBuffer(device, sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = size_of(ground_verts)})
 	if vertex_buffer == nil {
 		log_sdl_fatal("Failed to create vertex buffer")
 	}
 	defer sdl.ReleaseGPUBuffer(device, vertex_buffer)
 
-	// Upload via transfer buffer
-	transfer_buf := sdl.CreateGPUTransferBuffer(
+	// Upload ground quad + checkerboard texture via single copy pass
+	vert_transfer := sdl.CreateGPUTransferBuffer(
 		device,
-		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = size_of(vertices)},
+		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = size_of(ground_verts)},
 	)
-	data_ptr := sdl.MapGPUTransferBuffer(device, transfer_buf, false)
-	mem.copy(data_ptr, &vertices, size_of(vertices))
-	sdl.UnmapGPUTransferBuffer(device, transfer_buf)
+	vert_ptr := sdl.MapGPUTransferBuffer(device, vert_transfer, false)
+	mem.copy(vert_ptr, &ground_verts, size_of(ground_verts))
+	sdl.UnmapGPUTransferBuffer(device, vert_transfer)
+
+	tex_transfer := sdl.CreateGPUTransferBuffer(
+		device,
+		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = size_of(checker_pixels)},
+	)
+	tex_ptr := sdl.MapGPUTransferBuffer(device, tex_transfer, false)
+	mem.copy(tex_ptr, &checker_pixels, size_of(checker_pixels))
+	sdl.UnmapGPUTransferBuffer(device, tex_transfer)
 
 	upload_cmd := sdl.AcquireGPUCommandBuffer(device)
 	copy_pass := sdl.BeginGPUCopyPass(upload_cmd)
 	sdl.UploadToGPUBuffer(
 		copy_pass,
-		sdl.GPUTransferBufferLocation{transfer_buffer = transfer_buf, offset = 0},
-		sdl.GPUBufferRegion{buffer = vertex_buffer, offset = 0, size = size_of(vertices)},
+		sdl.GPUTransferBufferLocation{transfer_buffer = vert_transfer, offset = 0},
+		sdl.GPUBufferRegion{buffer = vertex_buffer, offset = 0, size = size_of(ground_verts)},
+		false,
+	)
+	sdl.UploadToGPUTexture(
+		copy_pass,
+		sdl.GPUTextureTransferInfo {
+			transfer_buffer = tex_transfer,
+			pixels_per_row = CHECKER_SIZE,
+			rows_per_layer = CHECKER_SIZE,
+		},
+		sdl.GPUTextureRegion {
+			texture = ground_texture,
+			w = CHECKER_SIZE,
+			h = CHECKER_SIZE,
+			d = 1,
+		},
 		false,
 	)
 	sdl.EndGPUCopyPass(copy_pass)
 	_ = sdl.SubmitGPUCommandBuffer(upload_cmd)
-	sdl.ReleaseGPUTransferBuffer(device, transfer_buf)
+	sdl.ReleaseGPUTransferBuffer(device, vert_transfer)
+	sdl.ReleaseGPUTransferBuffer(device, tex_transfer)
+
+	// Hardcoded camera — top-down-ish angle looking at origin
+	proj := linalg.matrix4_perspective_f32(math.to_radians(f32(45.0)), f32(WINDOW_WIDTH) / f32(WINDOW_HEIGHT), 0.1, 100.0)
+	view := linalg.matrix4_look_at_f32({0, 10, 15}, {0, 0, 0}, {0, 1, 0})
+	view_proj := proj * view
 
 	// Frame timing
 	perf_freq := sdl.GetPerformanceFrequency()
@@ -256,20 +376,36 @@ main :: proc() {
 			continue
 		}
 
-		// Begin render pass — clear to dark gray
+		// Begin render pass — clear to dark gray, clear depth to 1.0
 		color_target := sdl.GPUColorTargetInfo {
 			texture     = swapchain_tex,
 			load_op     = .CLEAR,
 			store_op    = .STORE,
 			clear_color = {0.1, 0.1, 0.1, 1.0},
 		}
-		render_pass := sdl.BeginGPURenderPass(cmd, &color_target, 1, nil)
+		depth_target := sdl.GPUDepthStencilTargetInfo {
+			texture     = depth_texture,
+			load_op     = .CLEAR,
+			store_op    = .STORE,
+			clear_depth = 1.0,
+		}
+		render_pass := sdl.BeginGPURenderPass(cmd, &color_target, 1, &depth_target)
 
-		// Draw triangle
+		// Draw ground plane
 		sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
-		bindings := [1]sdl.GPUBufferBinding{{buffer = vertex_buffer, offset = 0}}
-		sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&bindings), 1)
-		sdl.DrawGPUPrimitives(render_pass, 3, 1, 0, 0)
+
+		uniforms := Mesh_Uniforms {
+			view_proj = view_proj,
+			model = 1, // identity
+		}
+		sdl.PushGPUVertexUniformData(cmd, 0, &uniforms, size_of(Mesh_Uniforms))
+
+		tex_sampler_bindings := [1]sdl.GPUTextureSamplerBinding{{texture = ground_texture, sampler = sampler}}
+		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&tex_sampler_bindings), 1)
+
+		vbuf_bindings := [1]sdl.GPUBufferBinding{{buffer = vertex_buffer, offset = 0}}
+		sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&vbuf_bindings), 1)
+		sdl.DrawGPUPrimitives(render_pass, 6, 1, 0, 0)
 
 		sdl.EndGPURenderPass(render_pass)
 
