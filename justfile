@@ -29,8 +29,12 @@ build-shaders:
         echo "  (no shaders found)"
     fi
 
+# Format Odin source
+fmt:
+    odinfmt -w src/
+
 # Build the Odin project (depends on shaders)
-build: build-shaders
+build: fmt build-shaders
     mkdir -p build
     odin build src/ -out:build/project_dream -debug
 

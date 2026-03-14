@@ -4,6 +4,22 @@ Newest entries first.
 
 ---
 
+## 2026-03-13 — Sprint 1: Phase 4 Complete (Sprite Pipeline + Billboard)
+
+**What:** Added the sprite rendering system — 2D billboard sprite in the 3D world.
+
+- Sprite shaders: vertex shader generates quad from gl_VertexIndex (no vertex buffer), billboard math using camera right/up vectors, UV from sprite rect with half-pixel inset
+- Fragment shader: texture sample + alpha test (discard < 0.5) for crisp pixel art
+- Sprite pipeline: triangle strip, no backface culling, NEAREST filter, CLAMP_TO_EDGE, depth on
+- First real texture loading from disk via stb_image (nate.png sprite sheet, 364x724, 33x33 cells)
+- Sprite_Uniforms struct matching std140 layout (view_proj, camera vectors, sprite transform, atlas info)
+- Camera right/up vectors computed per frame for both follow and debug cameras
+- Added `odinfmt -w` to build pipeline via justfile
+
+**Key files:** shaders/sprite.vert.glsl, shaders/sprite.frag.glsl, assets/sprites/nate.png
+
+---
+
 ## 2026-03-13 — Sprint 1: Phases 1-3 Complete
 
 **What:** Built the foundation — platform layer, 3D mesh pipeline, and camera system.

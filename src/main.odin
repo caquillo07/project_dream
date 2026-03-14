@@ -1,6 +1,7 @@
 package main
 
 import intrinsics "base:intrinsics"
+import "core:c"
 import "core:fmt"
 import "core:log"
 import "core:math"
@@ -9,6 +10,7 @@ import "core:mem"
 import vmem "core:mem/virtual"
 import "core:os"
 import sdl "vendor:sdl3"
+import stbi "vendor:stb/image"
 
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
@@ -22,6 +24,20 @@ Mesh_Vertex :: struct {
 Mesh_Uniforms :: struct {
 	view_proj: matrix[4, 4]f32,
 	model:     matrix[4, 4]f32,
+}
+
+// Must match sprite.vert.glsl SpriteUniforms (std140 layout)
+Sprite_Uniforms :: struct {
+	view_proj:    matrix[4, 4]f32,
+	camera_right: [3]f32,
+	_pad0:        f32,
+	camera_up:    [3]f32,
+	_pad1:        f32,
+	sprite_pos:   [3]f32,
+	_pad2:        f32,
+	sprite_size:  [2]f32,
+	atlas_size:   [2]f32,
+	sprite_rect:  [4]f32, // x, y, w, h in pixels
 }
 
 Button_State :: struct {
@@ -53,12 +69,12 @@ Camera :: struct {
 	pitch:    f32, // fixed angle from horizontal (radians)
 }
 
-CAMERA_PITCH        :: 50.0 * math.RAD_PER_DEG
-CAMERA_DIST_MIN     :: f32(5.0)
-CAMERA_DIST_MAX     :: f32(30.0)
-CAMERA_DIST_DEFAULT :: f32(15.0)
-CAMERA_ZOOM_SPEED   :: f32(1.5)
-CAMERA_PAN_SPEED    :: f32(8.0) // temporary WASD panning until player exists
+CAMERA_PITCH :: 50.0 * math.RAD_PER_DEG
+CAMERA_DIST_MIN :: f32(5.0)
+CAMERA_DIST_MAX :: f32(30.0)
+CAMERA_DIST_DEFAULT :: f32(8.0)
+CAMERA_ZOOM_SPEED :: f32(1.5)
+CAMERA_PAN_SPEED :: f32(8.0) // temporary WASD panning until player exists
 
 // Debug free camera — F1 toggle, FPS-style controls
 Debug_Camera :: struct {
@@ -69,9 +85,9 @@ Debug_Camera :: struct {
 }
 
 DEBUG_CAM_SPEED_DEFAULT :: f32(10.0)
-DEBUG_CAM_SPEED_MIN     :: f32(1.0)
-DEBUG_CAM_SPEED_MAX     :: f32(50.0)
-MOUSE_SENSITIVITY       :: f32(0.003)
+DEBUG_CAM_SPEED_MIN :: f32(1.0)
+DEBUG_CAM_SPEED_MAX :: f32(50.0)
+MOUSE_SENSITIVITY :: f32(0.003)
 
 main :: proc() {
 	context.logger = log.create_console_logger()
@@ -108,6 +124,7 @@ main :: proc() {
 		panic("Failed to init permanent arena")
 	}
 	permanent_allocator := vmem.arena_allocator(&permanent_arena)
+	context.allocator = permanent_allocator
 
 	scratch_arena: vmem.Arena
 	if vmem.arena_init_growing(&scratch_arena, 16 * mem.Megabyte) != nil {
@@ -152,11 +169,7 @@ main :: proc() {
 			},
 			primitive_type = .TRIANGLELIST,
 			rasterizer_state = {fill_mode = .FILL, cull_mode = .BACK, front_face = .COUNTER_CLOCKWISE},
-			depth_stencil_state = {
-				compare_op = .LESS_OR_EQUAL,
-				enable_depth_test = true,
-				enable_depth_write = true,
-			},
+			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = true},
 			target_info = {
 				color_target_descriptions = raw_data(&color_target_descs),
 				num_color_targets = 1,
@@ -252,7 +265,10 @@ main :: proc() {
 		{{GROUND_HALF, 0, -GROUND_HALF}, {UV_TILES, 0}, {0, 1, 0}},
 	}
 
-	vertex_buffer := sdl.CreateGPUBuffer(device, sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = size_of(ground_verts)})
+	vertex_buffer := sdl.CreateGPUBuffer(
+		device,
+		sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = size_of(ground_verts)},
+	)
 	if vertex_buffer == nil {
 		log_sdl_fatal("Failed to create vertex buffer")
 	}
@@ -290,12 +306,7 @@ main :: proc() {
 			pixels_per_row = CHECKER_SIZE,
 			rows_per_layer = CHECKER_SIZE,
 		},
-		sdl.GPUTextureRegion {
-			texture = ground_texture,
-			w = CHECKER_SIZE,
-			h = CHECKER_SIZE,
-			d = 1,
-		},
+		sdl.GPUTextureRegion{texture = ground_texture, w = CHECKER_SIZE, h = CHECKER_SIZE, d = 1},
 		false,
 	)
 	sdl.EndGPUCopyPass(copy_pass)
@@ -303,13 +314,114 @@ main :: proc() {
 	sdl.ReleaseGPUTransferBuffer(device, vert_transfer)
 	sdl.ReleaseGPUTransferBuffer(device, tex_transfer)
 
+	// Sprite pipeline
+	sprite_vert := load_shader(device, "build/shaders/sprite.vert.metallib", .VERTEX, 1, 0, scratch_allocator)
+	sprite_frag := load_shader(device, "build/shaders/sprite.frag.metallib", .FRAGMENT, 0, 1, scratch_allocator)
+
+	sprite_pipeline := sdl.CreateGPUGraphicsPipeline(
+		device,
+		sdl.GPUGraphicsPipelineCreateInfo {
+			vertex_shader = sprite_vert,
+			fragment_shader = sprite_frag,
+			primitive_type = .TRIANGLESTRIP,
+			rasterizer_state = {fill_mode = .FILL, cull_mode = .NONE},
+			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = true},
+			target_info = {
+				color_target_descriptions = raw_data(&color_target_descs),
+				num_color_targets = 1,
+				depth_stencil_format = .D32_FLOAT,
+				has_depth_stencil_target = true,
+			},
+		},
+	)
+	if sprite_pipeline == nil {
+		log_sdl_fatal("Failed to create sprite pipeline")
+	}
+	defer sdl.ReleaseGPUGraphicsPipeline(device, sprite_pipeline)
+
+	sdl.ReleaseGPUShader(device, sprite_vert)
+	sdl.ReleaseGPUShader(device, sprite_frag)
+
+	sprite_sampler := sdl.CreateGPUSampler(
+		device,
+		sdl.GPUSamplerCreateInfo {
+			min_filter = .NEAREST,
+			mag_filter = .NEAREST,
+			address_mode_u = .CLAMP_TO_EDGE,
+			address_mode_v = .CLAMP_TO_EDGE,
+		},
+	)
+	if sprite_sampler == nil {
+		log_sdl_fatal("Failed to create sprite sampler")
+	}
+	defer sdl.ReleaseGPUSampler(device, sprite_sampler)
+
+	// Load sprite sheet
+	sprite_width, sprite_height, sprite_channels: c.int
+	sprite_pixels := stbi.load("assets/sprites/nate.png", &sprite_width, &sprite_height, &sprite_channels, 4)
+	if sprite_pixels == nil {
+		log.fatalf("Failed to load sprite sheet: %s", stbi.failure_reason())
+		panic("sprite load failed")
+	}
+	sprite_data_size := u32(sprite_width * sprite_height * 4)
+
+	sprite_texture := sdl.CreateGPUTexture(
+		device,
+		sdl.GPUTextureCreateInfo {
+			type = .D2,
+			format = .R8G8B8A8_UNORM,
+			width = u32(sprite_width),
+			height = u32(sprite_height),
+			layer_count_or_depth = 1,
+			num_levels = 1,
+			usage = {.SAMPLER},
+		},
+	)
+	if sprite_texture == nil {
+		log_sdl_fatal("Failed to create sprite texture")
+	}
+	defer sdl.ReleaseGPUTexture(device, sprite_texture)
+
+	// Upload sprite sheet to GPU
+	sprite_transfer := sdl.CreateGPUTransferBuffer(
+		device,
+		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = sprite_data_size},
+	)
+	sprite_ptr := sdl.MapGPUTransferBuffer(device, sprite_transfer, false)
+	mem.copy(sprite_ptr, sprite_pixels, int(sprite_data_size))
+	sdl.UnmapGPUTransferBuffer(device, sprite_transfer)
+
+	sprite_upload_cmd := sdl.AcquireGPUCommandBuffer(device)
+	sprite_copy_pass := sdl.BeginGPUCopyPass(sprite_upload_cmd)
+	sdl.UploadToGPUTexture(
+		sprite_copy_pass,
+		sdl.GPUTextureTransferInfo {
+			transfer_buffer = sprite_transfer,
+			pixels_per_row = u32(sprite_width),
+			rows_per_layer = u32(sprite_height),
+		},
+		sdl.GPUTextureRegion{texture = sprite_texture, w = u32(sprite_width), h = u32(sprite_height), d = 1},
+		false,
+	)
+	sdl.EndGPUCopyPass(sprite_copy_pass)
+	_ = sdl.SubmitGPUCommandBuffer(sprite_upload_cmd)
+	sdl.ReleaseGPUTransferBuffer(device, sprite_transfer)
+	stbi.image_free(sprite_pixels)
+
+	log.infof("Loaded sprite sheet: %dx%d", sprite_width, sprite_height)
+
 	// Camera
 	cam := Camera {
 		target   = {0, 0, 0},
 		distance = CAMERA_DIST_DEFAULT,
 		pitch    = CAMERA_PITCH,
 	}
-	proj := linalg.matrix4_perspective_f32(math.to_radians(f32(45.0)), f32(WINDOW_WIDTH) / f32(WINDOW_HEIGHT), 0.1, 100.0)
+	proj := linalg.matrix4_perspective_f32(
+		math.to_radians(f32(45.0)),
+		f32(WINDOW_WIDTH) / f32(WINDOW_HEIGHT),
+		0.1,
+		100.0,
+	)
 
 	// Debug camera state
 	debug_mode: bool
@@ -353,7 +465,16 @@ main :: proc() {
 
 		if title_accumulator >= TITLE_UPDATE_INTERVAL {
 			avg_ms := title_ms_sum / f32(title_frame_count)
-			sdl.SetWindowTitle(window, fmt.ctprintf("Project Dream | %.1fms avg | %.1f / %.1f min/max | %.0f fps", avg_ms, title_ms_min, title_ms_max, 1000.0 / avg_ms))
+			sdl.SetWindowTitle(
+				window,
+				fmt.ctprintf(
+					"Project Dream | %.1fms avg | %.1f / %.1f min/max | %.0f fps",
+					avg_ms,
+					title_ms_min,
+					title_ms_max,
+					1000.0 / avg_ms,
+				),
+			)
 			title_accumulator = 0
 			title_frame_count = 0
 			title_ms_sum = 0
@@ -396,7 +517,11 @@ main :: proc() {
 			case .MOUSE_WHEEL:
 				if debug_mode {
 					// Scroll adjusts debug camera speed
-					debug_cam.speed = clamp(debug_cam.speed + event.wheel.y * 2.0, DEBUG_CAM_SPEED_MIN, DEBUG_CAM_SPEED_MAX)
+					debug_cam.speed = clamp(
+						debug_cam.speed + event.wheel.y * 2.0,
+						DEBUG_CAM_SPEED_MIN,
+						DEBUG_CAM_SPEED_MAX,
+					)
 				} else {
 					// Scroll zooms follow camera
 					cam.distance -= event.wheel.y * CAMERA_ZOOM_SPEED
@@ -416,6 +541,8 @@ main :: proc() {
 
 		// Camera update
 		view_proj: matrix[4, 4]f32
+		cam_right: [3]f32
+		cam_up: [3]f32
 		if debug_mode {
 			// Debug free camera — WASD movement along view vectors
 			forward := [3]f32 {
@@ -426,10 +553,10 @@ main :: proc() {
 			right := [3]f32{math.cos(debug_cam.yaw), 0, math.sin(debug_cam.yaw)}
 			move_speed := debug_cam.speed * input.dt
 
-			if input.move_up.is_down    do debug_cam.position += forward * move_speed
-			if input.move_down.is_down  do debug_cam.position -= forward * move_speed
+			if input.move_up.is_down do debug_cam.position += forward * move_speed
+			if input.move_down.is_down do debug_cam.position -= forward * move_speed
 			if input.move_right.is_down do debug_cam.position += right * move_speed
-			if input.move_left.is_down  do debug_cam.position -= right * move_speed
+			if input.move_left.is_down do debug_cam.position -= right * move_speed
 
 			keyboard := sdl.GetKeyboardState(nil)
 			if keyboard[sdl.Scancode.E] do debug_cam.position.y += move_speed
@@ -437,11 +564,13 @@ main :: proc() {
 
 			view := linalg.matrix4_look_at_f32(debug_cam.position, debug_cam.position + forward, {0, 1, 0})
 			view_proj = proj * view
+			cam_right = right
+			cam_up = linalg.cross(right, forward)
 		} else {
 			// Follow camera — WASD pans target (temporary until player exists)
-			if input.move_up.is_down    do cam.target.z -= CAMERA_PAN_SPEED * input.dt
-			if input.move_down.is_down  do cam.target.z += CAMERA_PAN_SPEED * input.dt
-			if input.move_left.is_down  do cam.target.x -= CAMERA_PAN_SPEED * input.dt
+			if input.move_up.is_down do cam.target.z -= CAMERA_PAN_SPEED * input.dt
+			if input.move_down.is_down do cam.target.z += CAMERA_PAN_SPEED * input.dt
+			if input.move_left.is_down do cam.target.x -= CAMERA_PAN_SPEED * input.dt
 			if input.move_right.is_down do cam.target.x += CAMERA_PAN_SPEED * input.dt
 
 			offset_y := cam.distance * math.sin(cam.pitch)
@@ -449,6 +578,9 @@ main :: proc() {
 			eye := cam.target + {0, offset_y, offset_z}
 			view := linalg.matrix4_look_at_f32(eye, cam.target, {0, 1, 0})
 			view_proj = proj * view
+			cam_right = {1, 0, 0}
+			cam_forward := [3]f32{0, -math.sin(cam.pitch), -math.cos(cam.pitch)}
+			cam_up = linalg.cross(cam_right, cam_forward)
 		}
 
 		// Acquire command buffer
@@ -491,7 +623,7 @@ main :: proc() {
 
 		uniforms := Mesh_Uniforms {
 			view_proj = view_proj,
-			model = 1, // identity
+			model     = 1, // identity
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &uniforms, size_of(Mesh_Uniforms))
 
@@ -501,6 +633,27 @@ main :: proc() {
 		vbuf_bindings := [1]sdl.GPUBufferBinding{{buffer = vertex_buffer, offset = 0}}
 		sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&vbuf_bindings), 1)
 		sdl.DrawGPUPrimitives(render_pass, 6, 1, 0, 0)
+
+		// Draw sprite
+		sdl.BindGPUGraphicsPipeline(render_pass, sprite_pipeline)
+
+		sprite_uniforms := Sprite_Uniforms {
+			view_proj    = view_proj,
+			camera_right = cam_right,
+			camera_up    = cam_up,
+			sprite_pos   = {0, 0, 0},
+			sprite_size  = {1.5, 1.5},
+			atlas_size   = {f32(sprite_width), f32(sprite_height)},
+			sprite_rect  = {0, 33, 33, 33}, // idle down frame
+		}
+		sdl.PushGPUVertexUniformData(cmd, 0, &sprite_uniforms, size_of(Sprite_Uniforms))
+
+		sprite_sampler_bindings := [1]sdl.GPUTextureSamplerBinding {
+			{texture = sprite_texture, sampler = sprite_sampler},
+		}
+		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&sprite_sampler_bindings), 1)
+
+		sdl.DrawGPUPrimitives(render_pass, 4, 1, 0, 0)
 
 		sdl.EndGPURenderPass(render_pass)
 

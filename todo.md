@@ -46,11 +46,11 @@ the project's architecture.
 - [x] Debug free camera (F1 toggle, save/restore follow camera, mouse look, WASD+E/Q fly)
 
 ### Phase 4 — Sprite Pipeline + Billboard
-- [ ] Sprite vertex shader (generate quad from vertex index, billboard math)
-- [ ] Sprite fragment shader (texture sample, alpha test)
-- [ ] Sprite pipeline (no backface culling, nearest-neighbor filtering)
-- [ ] Load a sprite sheet texture
-- [ ] Single sprite rendered as billboard in 3D world
+- [x] Sprite vertex shader (generate quad from vertex index, billboard math)
+- [x] Sprite fragment shader (texture sample, alpha test)
+- [x] Sprite pipeline (no backface culling, nearest-neighbor filtering)
+- [x] Load a sprite sheet texture (stb_image)
+- [x] Single sprite rendered as billboard in 3D world
 
 ### Phase 5 — Player Movement + Animation
 - [ ] Player entity with world position
@@ -75,9 +75,10 @@ the project's architecture.
 - Phase 1 — Platform Layer
 - Phase 2 — Mesh Pipeline + Ground Plane
 - Phase 3 — 3D Camera
+- Phase 4 — Sprite Pipeline + Billboard
 
 **In Progress:**
-- Phase 4 — Sprite Pipeline + Billboard
+- Phase 5 — Player Movement + Animation
 
 **Blocked:**
 - (none)
@@ -92,6 +93,9 @@ the project's architecture.
 - `context.temp_allocator` defaults to a hidden allocator we don't control — set it to our scratch arena
 - `sdl.SetWindowRelativeMouseMode` returns bool — must handle with `_ =`
 - Follow camera: position derived from target + spherical offset (distance * sin/cos pitch) — don't store position directly
+- Billboard sprites need camera right/up vectors — compute alongside view_proj each frame
+- Sprite pipeline: no vertex buffer, quad from gl_VertexIndex, triangle strip (4 verts)
+- stb_image: `stbi.load` returns `[^]byte`, free with `stbi.image_free`, force RGBA with channel=4
 
 ---
 

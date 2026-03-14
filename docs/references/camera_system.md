@@ -200,6 +200,37 @@ This means you can fly around, inspect anything, and F1 back to exactly where th
 
 ---
 
+## Billboard Vectors
+
+Both cameras compute `cam_right` and `cam_up` alongside `view_proj` each frame. These are needed by the sprite system for billboarding (see [sprite_system.md](sprite_system.md)).
+
+### Follow camera
+
+The follow camera has no yaw (always behind the target), so right is always world X:
+
+```odin
+cam_right = {1, 0, 0}
+cam_forward := [3]f32{0, -math.sin(cam.pitch), -math.cos(cam.pitch)}
+cam_up = linalg.cross(cam_right, cam_forward)
+// cam_up = {0, cos(pitch), -sin(pitch)}
+```
+
+### Debug camera
+
+The debug camera has arbitrary yaw, so right depends on orientation:
+
+```odin
+cam_right = right  // = {cos(yaw), 0, sin(yaw)}, already computed for movement
+cam_up = linalg.cross(right, forward)
+// cam_up = {-sin(yaw)*sin(pitch), cos(pitch), cos(yaw)*sin(pitch)}
+```
+
+### Why cross(right, forward) and not cross(forward, up)?
+
+`cross(right, forward)` gives us the camera's true up vector — perpendicular to both the right axis and the view direction. This is what we need for billboarding: the sprite should expand along the camera's actual up, not the world up. If the camera is pitched down (as the follow camera always is), world up `{0,1,0}` would make sprites lean away from the viewer.
+
+---
+
 ## Key Concepts
 
 ### World space vs Camera space vs Clip space
