@@ -46,6 +46,33 @@ Debug_Timing :: struct {
 	frame_ms: f32,
 }
 
+// Follow camera — fixed angle, follows target, scroll-wheel zoom (HGSS / Link's Awakening style)
+Camera :: struct {
+	target:   [3]f32,
+	distance: f32,
+	pitch:    f32, // fixed angle from horizontal (radians)
+}
+
+CAMERA_PITCH        :: 50.0 * math.RAD_PER_DEG
+CAMERA_DIST_MIN     :: f32(5.0)
+CAMERA_DIST_MAX     :: f32(30.0)
+CAMERA_DIST_DEFAULT :: f32(15.0)
+CAMERA_ZOOM_SPEED   :: f32(1.5)
+CAMERA_PAN_SPEED    :: f32(8.0) // temporary WASD panning until player exists
+
+// Debug free camera — F1 toggle, FPS-style controls
+Debug_Camera :: struct {
+	position: [3]f32,
+	yaw:      f32,
+	pitch:    f32,
+	speed:    f32,
+}
+
+DEBUG_CAM_SPEED_DEFAULT :: f32(10.0)
+DEBUG_CAM_SPEED_MIN     :: f32(1.0)
+DEBUG_CAM_SPEED_MAX     :: f32(50.0)
+MOUSE_SENSITIVITY       :: f32(0.003)
+
 main :: proc() {
 	context.logger = log.create_console_logger()
 	defer log.destroy_console_logger(context.logger)
@@ -276,10 +303,18 @@ main :: proc() {
 	sdl.ReleaseGPUTransferBuffer(device, vert_transfer)
 	sdl.ReleaseGPUTransferBuffer(device, tex_transfer)
 
-	// Hardcoded camera — top-down-ish angle looking at origin
+	// Camera
+	cam := Camera {
+		target   = {0, 0, 0},
+		distance = CAMERA_DIST_DEFAULT,
+		pitch    = CAMERA_PITCH,
+	}
 	proj := linalg.matrix4_perspective_f32(math.to_radians(f32(45.0)), f32(WINDOW_WIDTH) / f32(WINDOW_HEIGHT), 0.1, 100.0)
-	view := linalg.matrix4_look_at_f32({0, 10, 15}, {0, 0, 0}, {0, 1, 0})
-	view_proj := proj * view
+
+	// Debug camera state
+	debug_mode: bool
+	debug_cam: Debug_Camera
+	saved_cam: Camera
 
 	// Frame timing
 	perf_freq := sdl.GetPerformanceFrequency()
@@ -335,6 +370,43 @@ main :: proc() {
 				#partial switch event.key.scancode {
 				case .ESCAPE:
 					running = false
+				case .F1:
+					if !debug_mode {
+						// Enter debug mode — save follow camera, init debug camera at current eye position
+						saved_cam = cam
+						offset_y := cam.distance * math.sin(cam.pitch)
+						offset_z := cam.distance * math.cos(cam.pitch)
+						debug_cam = Debug_Camera {
+							position = cam.target + {0, offset_y, offset_z},
+							yaw      = 0,
+							pitch    = -cam.pitch, // looking down at target
+							speed    = DEBUG_CAM_SPEED_DEFAULT,
+						}
+						debug_mode = true
+						_ = sdl.SetWindowRelativeMouseMode(window, true)
+						log.infof("Debug camera ON")
+					} else {
+						// Exit debug mode — restore follow camera
+						cam = saved_cam
+						debug_mode = false
+						_ = sdl.SetWindowRelativeMouseMode(window, false)
+						log.infof("Debug camera OFF")
+					}
+				}
+			case .MOUSE_WHEEL:
+				if debug_mode {
+					// Scroll adjusts debug camera speed
+					debug_cam.speed = clamp(debug_cam.speed + event.wheel.y * 2.0, DEBUG_CAM_SPEED_MIN, DEBUG_CAM_SPEED_MAX)
+				} else {
+					// Scroll zooms follow camera
+					cam.distance -= event.wheel.y * CAMERA_ZOOM_SPEED
+					cam.distance = clamp(cam.distance, CAMERA_DIST_MIN, CAMERA_DIST_MAX)
+				}
+			case .MOUSE_MOTION:
+				if debug_mode {
+					debug_cam.yaw += event.motion.xrel * MOUSE_SENSITIVITY
+					debug_cam.pitch -= event.motion.yrel * MOUSE_SENSITIVITY
+					debug_cam.pitch = clamp(debug_cam.pitch, -85.0 * math.RAD_PER_DEG, 85.0 * math.RAD_PER_DEG)
 				}
 			}
 		}
@@ -342,19 +414,42 @@ main :: proc() {
 		// Gather input from keyboard state
 		gather_input(&input)
 
-		// Debug: log input state changes
-		if input.move_up.pressed    do log.infof("UP pressed")
-		if input.move_up.released   do log.infof("UP released")
-		if input.move_down.pressed  do log.infof("DOWN pressed")
-		if input.move_down.released do log.infof("DOWN released")
-		if input.move_left.pressed  do log.infof("LEFT pressed")
-		if input.move_left.released do log.infof("LEFT released")
-		if input.move_right.pressed  do log.infof("RIGHT pressed")
-		if input.move_right.released do log.infof("RIGHT released")
-		if input.action_a.pressed   do log.infof("ACTION_A pressed")
-		if input.action_a.released  do log.infof("ACTION_A released")
-		if input.action_b.pressed   do log.infof("ACTION_B pressed")
-		if input.action_b.released  do log.infof("ACTION_B released")
+		// Camera update
+		view_proj: matrix[4, 4]f32
+		if debug_mode {
+			// Debug free camera — WASD movement along view vectors
+			forward := [3]f32 {
+				math.sin(debug_cam.yaw) * math.cos(debug_cam.pitch),
+				math.sin(debug_cam.pitch),
+				-math.cos(debug_cam.yaw) * math.cos(debug_cam.pitch),
+			}
+			right := [3]f32{math.cos(debug_cam.yaw), 0, math.sin(debug_cam.yaw)}
+			move_speed := debug_cam.speed * input.dt
+
+			if input.move_up.is_down    do debug_cam.position += forward * move_speed
+			if input.move_down.is_down  do debug_cam.position -= forward * move_speed
+			if input.move_right.is_down do debug_cam.position += right * move_speed
+			if input.move_left.is_down  do debug_cam.position -= right * move_speed
+
+			keyboard := sdl.GetKeyboardState(nil)
+			if keyboard[sdl.Scancode.E] do debug_cam.position.y += move_speed
+			if keyboard[sdl.Scancode.Q] do debug_cam.position.y -= move_speed
+
+			view := linalg.matrix4_look_at_f32(debug_cam.position, debug_cam.position + forward, {0, 1, 0})
+			view_proj = proj * view
+		} else {
+			// Follow camera — WASD pans target (temporary until player exists)
+			if input.move_up.is_down    do cam.target.z -= CAMERA_PAN_SPEED * input.dt
+			if input.move_down.is_down  do cam.target.z += CAMERA_PAN_SPEED * input.dt
+			if input.move_left.is_down  do cam.target.x -= CAMERA_PAN_SPEED * input.dt
+			if input.move_right.is_down do cam.target.x += CAMERA_PAN_SPEED * input.dt
+
+			offset_y := cam.distance * math.sin(cam.pitch)
+			offset_z := cam.distance * math.cos(cam.pitch)
+			eye := cam.target + {0, offset_y, offset_z}
+			view := linalg.matrix4_look_at_f32(eye, cam.target, {0, 1, 0})
+			view_proj = proj * view
+		}
 
 		// Acquire command buffer
 		cmd := sdl.AcquireGPUCommandBuffer(device)

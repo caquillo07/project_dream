@@ -39,11 +39,11 @@ the project's architecture.
 - [x] Textured ground visible on screen
 
 ### Phase 3 — 3D Camera
-- [ ] Perspective projection matrix
-- [ ] Camera struct (position, target, up)
-- [ ] View-projection matrix generation
-- [ ] Camera positioned at top-down-ish angle (Pokemon ORAS style)
-- [ ] Uniform buffer for view-projection passed to shaders
+- [ ] Camera struct (target, distance, fixed pitch — HGSS/Link's Awakening style)
+- [ ] View-projection computed per frame from camera state
+- [ ] Scroll wheel zoom (clamped min/max)
+- [ ] Temporary WASD target panning (replaced by player follow in Phase 5)
+- [ ] Debug free camera (F1 toggle, save/restore follow camera, mouse look, WASD fly)
 
 ### Phase 4 — Sprite Pipeline + Billboard
 - [ ] Sprite vertex shader (generate quad from vertex index, billboard math)
