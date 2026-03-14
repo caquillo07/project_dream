@@ -169,6 +169,14 @@ main :: proc() {
 	input: Game_Input
 	debug_timing: Debug_Timing
 
+	// Title bar timing display — sampled every 0.5s
+	TITLE_UPDATE_INTERVAL :: 0.5
+	title_accumulator: f32
+	title_frame_count: i32
+	title_ms_sum: f32
+	title_ms_min: f32 = 999.0
+	title_ms_max: f32
+
 	// Main loop
 	running := true
 	for running {
@@ -180,6 +188,23 @@ main :: proc() {
 		debug_timing.dt = input.dt
 		debug_timing.frame_ms = input.dt * 1000.0
 		debug_timing.fps = input.dt > 0 ? 1.0 / input.dt : 0
+
+		// Accumulate timing samples, update title periodically
+		title_accumulator += input.dt
+		title_frame_count += 1
+		title_ms_sum += debug_timing.frame_ms
+		title_ms_min = min(title_ms_min, debug_timing.frame_ms)
+		title_ms_max = max(title_ms_max, debug_timing.frame_ms)
+
+		if title_accumulator >= TITLE_UPDATE_INTERVAL {
+			avg_ms := title_ms_sum / f32(title_frame_count)
+			sdl.SetWindowTitle(window, fmt.ctprintf("Project Dream | %.1fms avg | %.1f / %.1f min/max | %.0f fps", avg_ms, title_ms_min, title_ms_max, 1000.0 / avg_ms))
+			title_accumulator = 0
+			title_frame_count = 0
+			title_ms_sum = 0
+			title_ms_min = 999.0
+			title_ms_max = 0
+		}
 
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
