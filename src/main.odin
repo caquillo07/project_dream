@@ -1,8 +1,10 @@
 package main
 
 import intrinsics "base:intrinsics"
+import "core:fmt"
 import "core:log"
 import "core:mem"
+import vmem "core:mem/virtual"
 import "core:os"
 import sdl "vendor:sdl3"
 
@@ -42,11 +44,34 @@ main :: proc() {
 		log_sdl_fatal("Failed to claim window")
 	}
 
-	// Load shaders
+	// Game memory — growable virtual memory arenas
+	// Initial block sizes are our best guess. If they grow, we log it so we can tune.
+	permanent_arena: vmem.Arena
+	if vmem.arena_init_growing(&permanent_arena, 64 * mem.Megabyte) != nil {
+		panic("Failed to init permanent arena")
+	}
+	permanent_allocator := vmem.arena_allocator(&permanent_arena)
+
+	scratch_arena: vmem.Arena
+	if vmem.arena_init_growing(&scratch_arena, 16 * mem.Megabyte) != nil {
+		panic("Failed to init scratch arena")
+	}
+	scratch_allocator := vmem.arena_allocator(&scratch_arena)
+
+	// Own all temp memory — tprintf and friends go through our scratch arena
+	context.temp_allocator = scratch_allocator
+
+	// Track arena sizes so we can warn on growth and tune initial sizes
+	permanent_reserved := permanent_arena.total_reserved
+	scratch_reserved := scratch_arena.total_reserved
+	log.infof("Permanent arena: %s reserved", format_bytes(permanent_reserved))
+	log.infof("Scratch arena: %s reserved", format_bytes(scratch_reserved))
+
+	// Load shaders (into scratch — bytes only needed until CreateGPUShader copies them)
 	swapchain_format := sdl.GetGPUSwapchainTextureFormat(device, window)
 
-	vert_shader := load_shader(device, "build/shaders/triangle.vert.metallib", .VERTEX, 0, 0)
-	frag_shader := load_shader(device, "build/shaders/triangle.frag.metallib", .FRAGMENT, 0, 0)
+	vert_shader := load_shader(device, "build/shaders/triangle.vert.metallib", .VERTEX, 0, 0, scratch_allocator)
+	frag_shader := load_shader(device, "build/shaders/triangle.frag.metallib", .FRAGMENT, 0, 0, scratch_allocator)
 
 	// Create graphics pipeline
 	vbuf_descs := [1]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Vertex), input_rate = .VERTEX}}
@@ -171,6 +196,27 @@ main :: proc() {
 		if !sdl.SubmitGPUCommandBuffer(cmd) {
 			log_sdl_error("Failed to submit GPU command buffer")
 		}
+
+		// Check for arena growth — means our initial sizes were too small
+		if permanent_arena.total_reserved != permanent_reserved {
+			log.warnf(
+				"Permanent arena grew: %s -> %s",
+				format_bytes(permanent_reserved),
+				format_bytes(permanent_arena.total_reserved),
+			)
+			permanent_reserved = permanent_arena.total_reserved
+		}
+		if scratch_arena.total_reserved != scratch_reserved {
+			log.warnf(
+				"Scratch arena grew: %s -> %s",
+				format_bytes(scratch_reserved),
+				format_bytes(scratch_arena.total_reserved),
+			)
+			scratch_reserved = scratch_arena.total_reserved
+		}
+
+		// Wipe scratch — everything allocated this frame is gone
+		free_all(scratch_allocator)
 	}
 }
 
@@ -180,14 +226,14 @@ load_shader :: proc(
 	stage: sdl.GPUShaderStage,
 	num_uniform_buffers: u32,
 	num_samplers: u32,
-	allocator := context.allocator,
+	allocator: mem.Allocator,
 ) -> ^sdl.GPUShader {
 	code, read_err := os.read_entire_file(path, allocator)
 	if read_err != nil {
 		log.fatalf("Failed to load shader: %s", path)
 		panic("shader load failed")
 	}
-	defer delete(code, allocator)
+	// No defer delete — caller owns the allocator lifetime (scratch gets wiped per frame)
 
 	shader := sdl.CreateGPUShader(
 		device,
@@ -207,6 +253,20 @@ load_shader :: proc(
 		panic("shader creation failed")
 	}
 	return shader
+}
+
+format_bytes :: proc(bytes: uint) -> string {
+	GB :: 1024 * 1024 * 1024
+	MB :: 1024 * 1024
+	KB :: 1024
+	if bytes >= GB {
+		return fmt.tprintf("%.2f GB", f64(bytes) / f64(GB))
+	} else if bytes >= MB {
+		return fmt.tprintf("%.2f MB", f64(bytes) / f64(MB))
+	} else if bytes >= KB {
+		return fmt.tprintf("%.2f KB", f64(bytes) / f64(KB))
+	}
+	return fmt.tprintf("%v B", bytes)
 }
 
 log_sdl_error :: proc(msg: string, location := #caller_location) {
