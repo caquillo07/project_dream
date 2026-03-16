@@ -121,6 +121,15 @@ main :: proc() {
 		log_sdl_fatal("Failed to claim window")
 	}
 
+	// Get actual pixel dimensions (may differ from logical on HiDPI/Retina)
+	pixel_w, pixel_h: c.int
+	assert(sdl.GetWindowSizeInPixels(window, &pixel_w, &pixel_h))
+	log.infof("Window: %dx%d logical, %dx%d pixels", WINDOW_WIDTH, WINDOW_HEIGHT, pixel_w, pixel_h)
+
+	// VSync on by default
+	vsync := true
+	assert(sdl.SetGPUSwapchainParameters(device, window, .SDR, .VSYNC))
+
 	// Game memory — growable virtual memory arenas
 	// Initial block sizes are our best guess. If they grow, we log it so we can tune.
 	permanent_arena: vmem.Arena
@@ -197,8 +206,8 @@ main :: proc() {
 		sdl.GPUTextureCreateInfo {
 			type = .D2,
 			format = .D32_FLOAT,
-			width = WINDOW_WIDTH,
-			height = WINDOW_HEIGHT,
+			width = u32(pixel_w),
+			height = u32(pixel_h),
 			layer_count_or_depth = 1,
 			num_levels = 1,
 			usage = {.DEPTH_STENCIL_TARGET},
@@ -421,12 +430,7 @@ main :: proc() {
 		distance = CAMERA_DIST_DEFAULT,
 		pitch    = CAMERA_PITCH,
 	}
-	proj := linalg.matrix4_perspective_f32(
-		math.to_radians(f32(45.0)),
-		f32(WINDOW_WIDTH) / f32(WINDOW_HEIGHT),
-		0.1,
-		100.0,
-	)
+	proj := linalg.matrix4_perspective_f32(math.to_radians(f32(45.0)), f32(pixel_w) / f32(pixel_h), 0.1, 100.0)
 
 	// Debug camera state
 	debug_mode: bool
@@ -517,6 +521,12 @@ main :: proc() {
 						debug_mode = false
 						assert(sdl.SetWindowRelativeMouseMode(window, false), "failed to set relative mouse mode")
 						log.infof("Debug camera OFF")
+					}
+				case .V:
+					if debug_mode {
+						vsync = !vsync
+						_ = sdl.SetGPUSwapchainParameters(device, window, .SDR, vsync ? .VSYNC : .IMMEDIATE)
+						log.infof("VSync: %s", vsync ? "ON" : "OFF")
 					}
 				}
 			case .MOUSE_WHEEL:
@@ -797,4 +807,3 @@ log_sdl_fatal :: proc(msg: string, location := #caller_location) -> ! {
 	}
 	panic("fatal error encountered", loc = location)
 }
-
