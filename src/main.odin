@@ -1,11 +1,11 @@
 package main
 
-import intrinsics "base:intrinsics"
+import "base:intrinsics"
 import "core:c"
 import "core:fmt"
 import "core:log"
 import "core:math"
-import linalg "core:math/linalg"
+import "core:math/linalg"
 import "core:mem"
 import vmem "core:mem/virtual"
 import "core:os"
@@ -15,10 +15,14 @@ import stbi "vendor:stb/image"
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
 
+Vec4 :: [4]f32
+Vec3 :: [3]f32
+Vec2 :: [2]f32
+
 Mesh_Vertex :: struct {
-	position: [3]f32,
-	uv:       [2]f32,
-	normal:   [3]f32,
+	position: Vec3,
+	uv:       Vec2,
+	normal:   Vec3,
 }
 
 Mesh_Uniforms :: struct {
@@ -29,15 +33,15 @@ Mesh_Uniforms :: struct {
 // Must match sprite.vert.glsl SpriteUniforms (std140 layout)
 Sprite_Uniforms :: struct {
 	view_proj:    matrix[4, 4]f32,
-	camera_right: [3]f32,
+	camera_right: Vec3,
 	_pad0:        f32,
-	camera_up:    [3]f32,
+	camera_up:    Vec3,
 	_pad1:        f32,
-	sprite_pos:   [3]f32,
+	sprite_pos:   Vec3,
 	_pad2:        f32,
-	sprite_size:  [2]f32,
-	atlas_size:   [2]f32,
-	sprite_rect:  [4]f32, // x, y, w, h in pixels
+	sprite_size:  Vec2,
+	atlas_size:   Vec2,
+	sprite_rect:  Vec4, // x, y, w, h in pixels
 }
 
 Button_State :: struct {
@@ -64,7 +68,7 @@ Debug_Timing :: struct {
 
 // Follow camera — fixed angle, follows target, scroll-wheel zoom (HGSS / Link's Awakening style)
 Camera :: struct {
-	target:   [3]f32,
+	target:   Vec3,
 	distance: f32,
 	pitch:    f32, // fixed angle from horizontal (radians)
 }
@@ -78,7 +82,7 @@ CAMERA_PAN_SPEED :: f32(8.0) // temporary WASD panning until player exists
 
 // Debug free camera — F1 toggle, FPS-style controls
 Debug_Camera :: struct {
-	position: [3]f32,
+	position: Vec3,
 	yaw:      f32,
 	pitch:    f32,
 	speed:    f32,
@@ -143,18 +147,19 @@ main :: proc() {
 
 	// Load shaders (into scratch — bytes only needed until CreateGPUShader copies them)
 	swapchain_format := sdl.GetGPUSwapchainTextureFormat(device, window)
+	log.infof("using swapchain format: %v", swapchain_format)
 
 	vert_shader := load_shader(device, "build/shaders/mesh.vert.metallib", .VERTEX, 1, 0, scratch_allocator)
 	frag_shader := load_shader(device, "build/shaders/mesh.frag.metallib", .FRAGMENT, 0, 1, scratch_allocator)
 
 	// Create mesh pipeline
-	vbuf_descs := [1]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Mesh_Vertex), input_rate = .VERTEX}}
-	vert_attrs := [3]sdl.GPUVertexAttribute {
+	vert_buf_descs := [?]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Mesh_Vertex), input_rate = .VERTEX}}
+	vert_attrs := [?]sdl.GPUVertexAttribute {
 		{location = 0, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, position))},
 		{location = 1, buffer_slot = 0, format = .FLOAT2, offset = u32(offset_of(Mesh_Vertex, uv))},
 		{location = 2, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, normal))},
 	}
-	color_target_descs := [1]sdl.GPUColorTargetDescription{{format = swapchain_format}}
+	color_target_descs := [?]sdl.GPUColorTargetDescription{{format = swapchain_format}}
 
 	pipeline := sdl.CreateGPUGraphicsPipeline(
 		device,
@@ -162,17 +167,17 @@ main :: proc() {
 			vertex_shader = vert_shader,
 			fragment_shader = frag_shader,
 			vertex_input_state = {
-				vertex_buffer_descriptions = raw_data(&vbuf_descs),
-				num_vertex_buffers = 1,
+				vertex_buffer_descriptions = raw_data(&vert_buf_descs),
+				num_vertex_buffers = len(vert_buf_descs),
 				vertex_attributes = raw_data(&vert_attrs),
-				num_vertex_attributes = 3,
+				num_vertex_attributes = len(vert_attrs),
 			},
 			primitive_type = .TRIANGLELIST,
 			rasterizer_state = {fill_mode = .FILL, cull_mode = .BACK, front_face = .COUNTER_CLOCKWISE},
 			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = true},
 			target_info = {
 				color_target_descriptions = raw_data(&color_target_descs),
-				num_color_targets = 1,
+				num_color_targets = len(color_target_descs),
 				depth_stencil_format = .D32_FLOAT,
 				has_depth_stencil_target = true,
 			},
@@ -310,7 +315,7 @@ main :: proc() {
 		false,
 	)
 	sdl.EndGPUCopyPass(copy_pass)
-	_ = sdl.SubmitGPUCommandBuffer(upload_cmd)
+	assert(sdl.SubmitGPUCommandBuffer(upload_cmd), "failed to submit ground buffer and texture upload command")
 	sdl.ReleaseGPUTransferBuffer(device, vert_transfer)
 	sdl.ReleaseGPUTransferBuffer(device, tex_transfer)
 
@@ -328,7 +333,7 @@ main :: proc() {
 			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = true},
 			target_info = {
 				color_target_descriptions = raw_data(&color_target_descs),
-				num_color_targets = 1,
+				num_color_targets = len(color_target_descs),
 				depth_stencil_format = .D32_FLOAT,
 				has_depth_stencil_target = true,
 			},
@@ -404,7 +409,7 @@ main :: proc() {
 		false,
 	)
 	sdl.EndGPUCopyPass(sprite_copy_pass)
-	_ = sdl.SubmitGPUCommandBuffer(sprite_upload_cmd)
+	assert(sdl.SubmitGPUCommandBuffer(sprite_upload_cmd), "failed to upload sprite cmd buffer")
 	sdl.ReleaseGPUTransferBuffer(device, sprite_transfer)
 	stbi.image_free(sprite_pixels)
 
@@ -504,13 +509,13 @@ main :: proc() {
 							speed    = DEBUG_CAM_SPEED_DEFAULT,
 						}
 						debug_mode = true
-						_ = sdl.SetWindowRelativeMouseMode(window, true)
+						assert(sdl.SetWindowRelativeMouseMode(window, true), "failed to set relative mouse mode")
 						log.infof("Debug camera ON")
 					} else {
 						// Exit debug mode — restore follow camera
 						cam = saved_cam
 						debug_mode = false
-						_ = sdl.SetWindowRelativeMouseMode(window, false)
+						assert(sdl.SetWindowRelativeMouseMode(window, false), "failed to set relative mouse mode")
 						log.infof("Debug camera OFF")
 					}
 				}
@@ -534,7 +539,7 @@ main :: proc() {
 					debug_cam.pitch = clamp(debug_cam.pitch, -85.0 * math.RAD_PER_DEG, 85.0 * math.RAD_PER_DEG)
 				}
 			case .WINDOW_PIXEL_SIZE_CHANGED:
-				log.info("changed pixel")
+				log.info("WINDOW_PIXEL_SIZE_CHANGED event fired")
 				new_w := u32(event.window.data1)
 				new_h := u32(event.window.data2)
 				if new_w > 0 && new_h > 0 {
@@ -569,16 +574,16 @@ main :: proc() {
 
 		// Camera update
 		view_proj: matrix[4, 4]f32
-		cam_right: [3]f32
-		cam_up: [3]f32
+		cam_right: Vec3
+		cam_up: Vec3
 		if debug_mode {
 			// Debug free camera — WASD movement along view vectors
-			forward := [3]f32 {
+			forward := Vec3 {
 				math.sin(debug_cam.yaw) * math.cos(debug_cam.pitch),
 				math.sin(debug_cam.pitch),
 				-math.cos(debug_cam.yaw) * math.cos(debug_cam.pitch),
 			}
-			right := [3]f32{math.cos(debug_cam.yaw), 0, math.sin(debug_cam.yaw)}
+			right := Vec3{math.cos(debug_cam.yaw), 0, math.sin(debug_cam.yaw)}
 			move_speed := debug_cam.speed * input.dt
 
 			if input.move_up.is_down do debug_cam.position += forward * move_speed
@@ -586,6 +591,7 @@ main :: proc() {
 			if input.move_right.is_down do debug_cam.position += right * move_speed
 			if input.move_left.is_down do debug_cam.position -= right * move_speed
 
+			// todo(hector) - move these to the input layer?
 			keyboard := sdl.GetKeyboardState(nil)
 			if keyboard[sdl.Scancode.E] do debug_cam.position.y += move_speed
 			if keyboard[sdl.Scancode.Q] do debug_cam.position.y -= move_speed
@@ -607,7 +613,7 @@ main :: proc() {
 			view := linalg.matrix4_look_at_f32(eye, cam.target, {0, 1, 0})
 			view_proj = proj * view
 			cam_right = {1, 0, 0}
-			cam_forward := [3]f32{0, -math.sin(cam.pitch), -math.cos(cam.pitch)}
+			cam_forward := Vec3{0, -math.sin(cam.pitch), -math.cos(cam.pitch)}
 			cam_up = linalg.cross(cam_right, cam_forward)
 		}
 
@@ -655,11 +661,11 @@ main :: proc() {
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &uniforms, size_of(Mesh_Uniforms))
 
-		tex_sampler_bindings := [1]sdl.GPUTextureSamplerBinding{{texture = ground_texture, sampler = sampler}}
-		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&tex_sampler_bindings), 1)
+		tex_sampler_bindings := [?]sdl.GPUTextureSamplerBinding{{texture = ground_texture, sampler = sampler}}
+		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&tex_sampler_bindings), len(tex_sampler_bindings))
 
-		vbuf_bindings := [1]sdl.GPUBufferBinding{{buffer = vertex_buffer, offset = 0}}
-		sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&vbuf_bindings), 1)
+		vbuf_bindings := [?]sdl.GPUBufferBinding{{buffer = vertex_buffer, offset = 0}}
+		sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&vbuf_bindings), len(vbuf_bindings))
 		sdl.DrawGPUPrimitives(render_pass, 6, 1, 0, 0)
 
 		// Draw sprite
@@ -676,10 +682,10 @@ main :: proc() {
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &sprite_uniforms, size_of(Sprite_Uniforms))
 
-		sprite_sampler_bindings := [1]sdl.GPUTextureSamplerBinding {
+		sprite_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
 			{texture = sprite_texture, sampler = sprite_sampler},
 		}
-		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&sprite_sampler_bindings), 1)
+		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&sprite_sampler_bindings), len(sprite_sampler_bindings))
 
 		sdl.DrawGPUPrimitives(render_pass, 4, 1, 0, 0)
 
@@ -791,3 +797,4 @@ log_sdl_fatal :: proc(msg: string, location := #caller_location) -> ! {
 	}
 	panic("fatal error encountered", loc = location)
 }
+

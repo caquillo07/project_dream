@@ -66,6 +66,7 @@ the project's architecture.
 - [ ] GameState allocated from permanent arena
 - [ ] Scratch arena reset every frame
 - [ ] Clean separation verified: game code has zero SDL imports
+- [ ] Pipeline table (Pipeline_ID enum, flat array of pipelines) — Level 2 rendering organization
 
 ---
 
