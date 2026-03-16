@@ -4,6 +4,25 @@ Newest entries first.
 
 ---
 
+## 2026-03-16 — Cross-Platform Shader Pipeline (ShaderCross)
+
+**What:** Replaced macOS-only offline shader compilation with runtime SPIR-V transpilation via SDL_ShaderCross.
+
+- Wrote Odin foreign bindings for ShaderCross (src/shadercross.odin, ~40 lines)
+- Simplified justfile: `glslc → .spv` only (removed spirv-cross, xcrun metal, metallib steps)
+- Device creation now queries ShaderCross for supported GPU shader formats (no hardcoded .METALLIB)
+- `load_shader` uses `ShaderCross_CompileGraphicsShaderFromSPIRV` instead of `CreateGPUShader`
+- Entrypoint changed from `"main0"` to `"main"` (ShaderCross handles the rename internally)
+- Shader compilation timing: ~5ms warm cache, ~290ms cold (macOS caches Metal shaders on disk)
+- Ship .spv files — one artifact runs on macOS (Metal), Linux (Vulkan), Windows (D3D12)
+- HiDPI: depth buffer and projection use pixel dimensions via `GetWindowSizeInPixels`
+- VSync toggle (V key, debug mode only) via `SetGPUSwapchainParameters`
+- Depth buffer recreated on window resize (WINDOW_PIXEL_SIZE_CHANGED event)
+
+**Key files:** src/shadercross.odin, src/main.odin, justfile
+
+---
+
 ## 2026-03-13 — Sprint 1: Phase 4 Complete (Sprite Pipeline + Billboard)
 
 **What:** Added the sprite rendering system — 2D billboard sprite in the 3D world.

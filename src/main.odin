@@ -110,7 +110,17 @@ main :: proc() {
 	}
 	defer sdl.DestroyWindow(window)
 
-	device := sdl.CreateGPUDevice({.METALLIB}, ODIN_DEBUG, nil)
+	// Init ShaderCross — runtime SPIR-V transpilation to native GPU format
+	if !ShaderCross_Init() {
+		log.fatalf("Failed to init ShaderCross: %s", sdl.GetError())
+		panic("ShaderCross init failed")
+	}
+	defer ShaderCross_Quit()
+
+	shader_formats := ShaderCross_GetSPIRVShaderFormats()
+	log.infof("ShaderCross supported formats: %v", shader_formats)
+
+	device := sdl.CreateGPUDevice(shader_formats, ODIN_DEBUG, nil)
 	if device == nil {
 		log_sdl_fatal("Failed to create GPU device")
 	}
@@ -154,12 +164,17 @@ main :: proc() {
 	log.infof("Permanent arena: %s reserved", format_bytes(permanent_reserved))
 	log.infof("Scratch arena: %s reserved", format_bytes(scratch_reserved))
 
-	// Load shaders (into scratch — bytes only needed until CreateGPUShader copies them)
+	// Load shaders (into scratch — bytes only needed until ShaderCross compiles them)
+	shader_count: int
+	shader_start := sdl.GetPerformanceCounter()
+
 	swapchain_format := sdl.GetGPUSwapchainTextureFormat(device, window)
 	log.infof("using swapchain format: %v", swapchain_format)
 
-	vert_shader := load_shader(device, "build/shaders/mesh.vert.metallib", .VERTEX, 1, 0, scratch_allocator)
-	frag_shader := load_shader(device, "build/shaders/mesh.frag.metallib", .FRAGMENT, 0, 1, scratch_allocator)
+	vert_shader := load_shader(device, "build/shaders/mesh.vert.spv", .VERTEX, 1, 0, scratch_allocator)
+	shader_count += 1
+	frag_shader := load_shader(device, "build/shaders/mesh.frag.spv", .FRAGMENT, 0, 1, scratch_allocator)
+	shader_count += 1
 
 	// Create mesh pipeline
 	vert_buf_descs := [?]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Mesh_Vertex), input_rate = .VERTEX}}
@@ -329,8 +344,10 @@ main :: proc() {
 	sdl.ReleaseGPUTransferBuffer(device, tex_transfer)
 
 	// Sprite pipeline
-	sprite_vert := load_shader(device, "build/shaders/sprite.vert.metallib", .VERTEX, 1, 0, scratch_allocator)
-	sprite_frag := load_shader(device, "build/shaders/sprite.frag.metallib", .FRAGMENT, 0, 1, scratch_allocator)
+	sprite_vert := load_shader(device, "build/shaders/sprite.vert.spv", .VERTEX, 1, 0, scratch_allocator)
+	shader_count += 1
+	sprite_frag := load_shader(device, "build/shaders/sprite.frag.spv", .FRAGMENT, 0, 1, scratch_allocator)
+	shader_count += 1
 
 	sprite_pipeline := sdl.CreateGPUGraphicsPipeline(
 		device,
@@ -452,6 +469,10 @@ main :: proc() {
 	title_ms_sum: f32
 	title_ms_min: f32 = 999.0
 	title_ms_max: f32
+
+	// Report shader compilation time
+	shader_elapsed := f32(sdl.GetPerformanceCounter() - shader_start) / f32(perf_freq) * 1000.0
+	log.infof("Shader compilation: %.2fms (%d shaders)", shader_elapsed, shader_count)
 
 	// Main loop
 	running := true
@@ -731,35 +752,38 @@ main :: proc() {
 
 load_shader :: proc(
 	device: ^sdl.GPUDevice,
-	path: string,
+	spv_path: string,
 	stage: sdl.GPUShaderStage,
 	num_uniform_buffers: u32,
 	num_samplers: u32,
 	allocator: mem.Allocator,
 ) -> ^sdl.GPUShader {
-	code, read_err := os.read_entire_file(path, allocator)
+	code, read_err := os.read_entire_file(spv_path, allocator)
 	if read_err != nil {
-		log.fatalf("Failed to load shader: %s", path)
+		log.fatalf("Failed to load shader: %s", spv_path)
 		panic("shader load failed")
 	}
-	// No defer delete — caller owns the allocator lifetime (scratch gets wiped per frame)
 
-	shader := sdl.CreateGPUShader(
+	sc_stage: ShaderCross_ShaderStage = stage == .VERTEX ? .VERTEX : .FRAGMENT
+
+	shader := ShaderCross_CompileGraphicsShaderFromSPIRV(
 		device,
-		sdl.GPUShaderCreateInfo {
-			code_size = len(code),
-			code = raw_data(code),
-			entrypoint = "main0",
-			format = {.METALLIB},
-			stage = stage,
+		&ShaderCross_SPIRV_Info {
+			bytecode = raw_data(code),
+			bytecode_size = c.size_t(len(code)),
+			entrypoint = "main",
+			shader_stage = sc_stage,
+		},
+		&ShaderCross_GraphicsShaderResourceInfo {
 			num_samplers = num_samplers,
 			num_uniform_buffers = num_uniform_buffers,
 		},
+		0,
 	)
 
 	if shader == nil {
-		log.fatalf("Failed to create shader: %s: %s", path, sdl.GetError())
-		panic("shader creation failed")
+		log.fatalf("Failed to compile shader: %s: %s", spv_path, sdl.GetError())
+		panic("shader compilation failed")
 	}
 	return shader
 }

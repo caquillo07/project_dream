@@ -3,7 +3,10 @@
 default:
     @just --list
 
-# Compile GLSL shaders → SPIR-V → Metal → metallib
+shadercross_lib := justfile_directory() / "ext-libs" / "SDL_gpu_shadercross" / "build"
+spirvcross_lib := shadercross_lib / "external" / "SPIRV-Cross"
+
+# Compile GLSL shaders → SPIR-V
 build-shaders:
     #!/usr/bin/env bash
     set -e
@@ -13,17 +16,12 @@ build-shaders:
         [ -f "$f" ] || continue
         shaders_found=1
         base=$(basename "$f" .glsl)
-        # Detect shader stage from filename
         case "$f" in
             *.vert.glsl) stage=vertex ;;
             *.frag.glsl) stage=fragment ;;
         esac
         glslc -fshader-stage="$stage" "$f" -o "build/shaders/${base}.spv"
-        spirv-cross "build/shaders/${base}.spv" --msl --output "build/shaders/${base}.metal"
-        xcrun metal -c "build/shaders/${base}.metal" -o "build/shaders/${base}.air"
-        xcrun metallib "build/shaders/${base}.air" -o "build/shaders/${base}.metallib"
-        rm "build/shaders/${base}.spv" "build/shaders/${base}.metal" "build/shaders/${base}.air"
-        echo "  $f → ${base}.metallib"
+        echo "  $f → ${base}.spv"
     done
     if [ "$shaders_found" -eq 0 ]; then
         echo "  (no shaders found)"
@@ -36,7 +34,8 @@ fmt:
 # Build the Odin project (depends on shaders)
 build: fmt build-shaders
     mkdir -p build
-    odin build src/ -out:build/project_dream -debug
+    odin build src/ -out:build/project_dream -debug \
+        -extra-linker-flags:"-L{{spirvcross_lib}} -lspirv-cross-c-shared -Wl,-rpath,{{spirvcross_lib}}"
 
 # Build and run
 run: build

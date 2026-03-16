@@ -25,7 +25,7 @@ the project's architecture.
 - [x] SDL3 init (window, GPU device, event loop)
 - [x] Frame timing (dt calculation, Debug_Timing struct)
 - [x] Input gathering (Game_Input struct, per-frame pressed/released)
-- [x] Shader loading (GLSL -> SPIR-V -> Metal -> metallib build pipeline)
+- [x] Shader loading (GLSL -> SPIR-V, runtime transpilation via ShaderCross)
 - [x] justfile with build + shader compilation commands
 - [x] Basic render loop (clear screen, present)
 - [x] Memory arenas (permanent + scratch, growable, virtual memory backed)
@@ -87,7 +87,8 @@ the project's architecture.
 ---
 
 ## Learnings
-- spirv-cross renames `main` to `main0` in Metal output — use `"main0"` as shader entrypoint
+- ShaderCross: runtime SPIR-V transpilation, ~5ms warm / ~290ms cold (macOS caches Metal shaders on disk)
+- ShaderCross: entrypoint is `"main"` (not `"main0"` like spirv-cross CLI output)
 - `os.read_entire_file` in Odin dev-2026-03 requires explicit allocator parameter
 - `sdl.SubmitGPUCommandBuffer` returns bool — must handle it or Odin errors
 - Always submit command buffer before `continue` to avoid GPU resource leaks
