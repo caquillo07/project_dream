@@ -52,6 +52,22 @@ the project's architecture.
 - [x] Load a sprite sheet texture (stb_image)
 - [x] Single sprite rendered as billboard in 3D world
 
+### Phase 4.5 — Code Cleanup & Architecture
+- [x] Renderer extracted (Render_State, init/deinit, begin_frame/end_frame, resize_viewport)
+- [x] Projection matrix lives in Render_State, updated on resize
+- [x] Samplers in renderer (nearest_repeat, nearest_clamp)
+- [x] load_texture / load_texture_from_pixels / unload_texture helpers
+- [x] Pipeline_Kind enum + table in Render_State
+- [x] Game struct (entities, input, debug state)
+- [x] Entity struct (kind, position, direction, speed), flat array, null at 0, player at 1
+- [x] File split: renderer.odin, game.odin, entity.odin, camera.odin, sprite.odin, model.odin, math.odin
+- [x] Sprite.rect fixed to Vec4
+- [ ] Store pipelines in renderer.pipelines[.Mesh] / [.Sprite] (still local vars in main)
+- [ ] Release pipelines in deinit_renderer
+- [ ] Move follow camera into Game struct (debug_cam/saved_cam already there, but cam is a local)
+- [ ] Init player entity once at startup (currently stomped every frame in render loop)
+- [ ] Remove unused Entity_ID type or wire it up
+
 ### Phase 5 — Player Movement + Animation
 - [ ] Player entity with world position
 - [ ] WASD movement (frame-rate independent)
@@ -66,7 +82,6 @@ the project's architecture.
 - [ ] GameState allocated from permanent arena
 - [ ] Scratch arena reset every frame
 - [ ] Clean separation verified: game code has zero SDL imports
-- [ ] Pipeline table (Pipeline_ID enum, flat array of pipelines) — Level 2 rendering organization
 
 ---
 
@@ -79,6 +94,9 @@ the project's architecture.
 - Phase 4 — Sprite Pipeline + Billboard
 
 **In Progress:**
+- Phase 4.5 — Code Cleanup & Architecture (5 items remaining)
+
+**Up Next:**
 - Phase 5 — Player Movement + Animation
 
 **Blocked:**
