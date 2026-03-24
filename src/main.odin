@@ -15,10 +15,6 @@ import stbi "vendor:stb/image"
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
 
-Vec4 :: [4]f32
-Vec3 :: [3]f32
-Vec2 :: [2]f32
-
 Mesh_Vertex :: struct {
 	position: Vec3,
 	uv:       Vec2,
