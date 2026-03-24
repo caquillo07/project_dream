@@ -15,17 +15,6 @@ import stbi "vendor:stb/image"
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
 
-Mesh_Vertex :: struct {
-	position: Vec3,
-	uv:       Vec2,
-	normal:   Vec3,
-}
-
-Mesh_Uniforms :: struct {
-	view_proj: matrix[4, 4]f32,
-	model:     matrix[4, 4]f32,
-}
-
 // Must match sprite.vert.glsl SpriteUniforms (std140 layout)
 Sprite_Uniforms :: struct {
 	view_proj:    matrix[4, 4]f32,
