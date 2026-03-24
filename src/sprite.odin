@@ -15,7 +15,7 @@ Sprite_Uniforms :: struct {
 }
 
 Sprite :: struct {
-	rect: Vec3,
+	rect: Vec4,
 	size: Vec2,
 	tint: Vec4,
 }
@@ -26,4 +26,3 @@ SpriteAnimation :: struct {
 	anim_frame: int,
 	is_playing: bool,
 }
-

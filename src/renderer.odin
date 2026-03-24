@@ -3,9 +3,13 @@ package main
 import "core:c"
 import fmt "core:fmt"
 import "core:log"
+import "core:math"
+import "core:math/linalg"
 import "core:mem"
 import "core:os"
+import "core:strings"
 import sdl "vendor:sdl3"
+import stbi "vendor:stb/image"
 
 Pipeline_Kind :: enum {
 	Mesh,
@@ -15,6 +19,7 @@ Pipeline_Kind :: enum {
 Render_State :: struct {
 	pixel_width:            int,
 	pixel_height:           int,
+	proj:                   linalg.Matrix4f32,
 	vsync:                  bool,
 	device:                 ^sdl.GPUDevice,
 	window:                 ^sdl.Window,
@@ -27,6 +32,8 @@ Render_State :: struct {
 
 Texture :: struct {
 	sdl_texture: ^sdl.GPUTexture,
+	width:       u32,
+	height:      u32,
 }
 
 init_renderer :: proc() {
@@ -112,6 +119,14 @@ init_renderer :: proc() {
 		log_sdl_fatal("Failed to create sprite sampler")
 	}
 
+	// projection matrix
+	renderer.proj = linalg.matrix4_perspective_f32(
+		math.to_radians(f32(45.0)),
+		f32(renderer.pixel_width) / f32(renderer.pixel_height),
+		0.1,
+		100.0,
+	)
+
 }
 
 deinit_renderer :: proc() {
@@ -140,12 +155,60 @@ renderer_resize_viewport :: proc(width, height: u32) {
 	if renderer.depth_texture == nil {
 		log_sdl_fatal("Failed to recreate depth texture on resize")
 	}
+	renderer.proj = linalg.matrix4_perspective_f32(math.to_radians(f32(45.0)), f32(width) / f32(height), 0.1, 100.0)
 }
 
 renderer_enable_vsync :: proc(enable: bool) {
-	if !sdl.SetGPUSwapchainParameters(renderer.device, renderer.window, .SDR, renderer.vsync ? .VSYNC : .IMMEDIATE) {
+	if !sdl.SetGPUSwapchainParameters(renderer.device, renderer.window, .SDR, enable ? .VSYNC : .IMMEDIATE) {
 		state := enable ? "enable" : "disable"
 		log_sdl_warn(fmt.tprintf("failed to %s vsync", state))
+	}
+}
+
+renderer_begin_frame :: proc() -> (^sdl.GPUCommandBuffer, ^sdl.GPURenderPass, bool) {
+	// Acquire command buffer
+	cmd := sdl.AcquireGPUCommandBuffer(renderer.device)
+	if cmd == nil {
+		log_sdl_error("Failed to acquire GPU command buffer")
+		return nil, nil, false
+	}
+
+	// Acquire swapchain texture
+	swapchain_tex: ^sdl.GPUTexture
+	if !sdl.WaitAndAcquireGPUSwapchainTexture(cmd, renderer.window, &swapchain_tex, nil, nil) {
+		log_sdl_error("Failed to acquire GPU swapchain texture")
+		_ = sdl.SubmitGPUCommandBuffer(cmd)
+		return nil, nil, false
+	}
+	if swapchain_tex == nil {
+		// Window minimized or not visible — submit empty command buffer
+		_ = sdl.SubmitGPUCommandBuffer(cmd)
+		return nil, nil, false
+	}
+
+	// Begin render pass — clear to dark gray, clear depth to 1.0
+	color_target := sdl.GPUColorTargetInfo {
+		texture     = swapchain_tex,
+		load_op     = .CLEAR,
+		store_op    = .STORE,
+		clear_color = {0.1, 0.1, 0.1, 1.0},
+	}
+	depth_target := sdl.GPUDepthStencilTargetInfo {
+		texture     = renderer.depth_texture,
+		load_op     = .CLEAR,
+		store_op    = .STORE,
+		clear_depth = 1.0,
+	}
+	render_pass := sdl.BeginGPURenderPass(cmd, &color_target, 1, &depth_target)
+	return cmd, render_pass, true
+}
+
+renderer_end_frame :: proc(cmd: ^sdl.GPUCommandBuffer, render_pass: ^sdl.GPURenderPass) {
+	sdl.EndGPURenderPass(render_pass)
+
+	// Submit
+	if !sdl.SubmitGPUCommandBuffer(cmd) {
+		log_sdl_error("Failed to submit GPU command buffer")
 	}
 }
 
@@ -187,8 +250,67 @@ load_shader :: proc(
 	return shader
 }
 
-load_texture :: proc() -> Texture {
-	t: Texture
-	return t
+load_texture :: proc(path: string) -> Texture {
+	// Load sprite sheet
+	image_width, image_height, image_channels: c.int
+	// todo handle allocations here
+	image_pixels := stbi.load(strings.unsafe_string_to_cstring(path), &image_width, &image_height, &image_channels, 4)
+	if image_pixels == nil {
+		log.fatalf("Failed to load texture iamge: %s", stbi.failure_reason())
+		panic("texture load failed")
+	}
+
+	defer stbi.image_free(image_pixels)
+	image_data_size := u32(image_width * image_height * 4)
+	return load_texture_from_pixels(u32(image_width), u32(image_height), image_pixels, image_data_size)
 }
 
+load_texture_from_pixels :: proc(tex_width, tex_height: u32, pixels_buf: [^]byte, pixels_buf_size: u32) -> Texture {
+	sdl_texture := sdl.CreateGPUTexture(
+		renderer.device,
+		sdl.GPUTextureCreateInfo {
+			type = .D2,
+			format = .R8G8B8A8_UNORM,
+			width = u32(tex_width),
+			height = u32(tex_height),
+			layer_count_or_depth = 1,
+			num_levels = 1,
+			usage = {.SAMPLER},
+		},
+	)
+	if sdl_texture == nil {
+		log_sdl_fatal("Failed to create texture")
+	}
+
+	// Upload sprite sheet to GPU
+	tex_transfer := sdl.CreateGPUTransferBuffer(
+		renderer.device,
+		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = pixels_buf_size},
+	)
+	transfer_buf_ptr := sdl.MapGPUTransferBuffer(renderer.device, tex_transfer, false)
+	mem.copy(transfer_buf_ptr, pixels_buf, int(pixels_buf_size))
+	sdl.UnmapGPUTransferBuffer(renderer.device, tex_transfer)
+
+	tex_upload_cmd := sdl.AcquireGPUCommandBuffer(renderer.device)
+	tex_copy_pass := sdl.BeginGPUCopyPass(tex_upload_cmd)
+	sdl.UploadToGPUTexture(
+		tex_copy_pass,
+		sdl.GPUTextureTransferInfo {
+			transfer_buffer = tex_transfer,
+			pixels_per_row = u32(tex_width),
+			rows_per_layer = u32(tex_height),
+		},
+		sdl.GPUTextureRegion{texture = sdl_texture, w = u32(tex_width), h = u32(tex_height), d = 1},
+		false,
+	)
+	sdl.EndGPUCopyPass(tex_copy_pass)
+	assert(sdl.SubmitGPUCommandBuffer(tex_upload_cmd), "failed to upload texture cmd buffer")
+	sdl.ReleaseGPUTransferBuffer(renderer.device, tex_transfer)
+
+	log.infof("Loaded texture: %dx%d", tex_width, tex_height)
+	return {sdl_texture = sdl_texture, height = u32(tex_height), width = u32(tex_width)}
+}
+
+unload_texture :: proc(t: Texture) {
+	sdl.ReleaseGPUTexture(renderer.device, t.sdl_texture)
+}

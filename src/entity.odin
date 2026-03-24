@@ -21,4 +21,3 @@ Direction :: enum {
 	Right,
 	Left,
 }
-

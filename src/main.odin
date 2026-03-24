@@ -9,7 +9,6 @@ import "core:math/linalg"
 import "core:mem"
 import vmem "core:mem/virtual"
 import sdl "vendor:sdl3"
-import stbi "vendor:stb/image"
 
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
@@ -129,22 +128,13 @@ main :: proc() {
 		}
 	}
 
-	ground_texture := sdl.CreateGPUTexture(
-		renderer.device,
-		sdl.GPUTextureCreateInfo {
-			type = .D2,
-			format = .R8G8B8A8_UNORM,
-			width = CHECKER_SIZE,
-			height = CHECKER_SIZE,
-			layer_count_or_depth = 1,
-			num_levels = 1,
-			usage = {.SAMPLER},
-		},
+	ground_texture := load_texture_from_pixels(
+		CHECKER_SIZE,
+		CHECKER_SIZE,
+		raw_data(checker_pixels[:]),
+		size_of(checker_pixels),
 	)
-	if ground_texture == nil {
-		log_sdl_fatal("Failed to create ground texture")
-	}
-	defer sdl.ReleaseGPUTexture(renderer.device, ground_texture)
+	defer unload_texture(ground_texture)
 
 	// Ground quad — 6 vertices on XZ plane at Y=0
 	GROUND_HALF :: f32(10.0)
@@ -169,7 +159,7 @@ main :: proc() {
 	}
 	defer sdl.ReleaseGPUBuffer(renderer.device, vertex_buffer)
 
-	// Upload ground quad + checkerboard texture via single copy pass
+	// Upload ground quad to GPU with a copy pass
 	vert_transfer := sdl.CreateGPUTransferBuffer(
 		renderer.device,
 		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = size_of(ground_verts)},
@@ -177,14 +167,6 @@ main :: proc() {
 	vert_ptr := sdl.MapGPUTransferBuffer(renderer.device, vert_transfer, false)
 	mem.copy(vert_ptr, &ground_verts, size_of(ground_verts))
 	sdl.UnmapGPUTransferBuffer(renderer.device, vert_transfer)
-
-	tex_transfer := sdl.CreateGPUTransferBuffer(
-		renderer.device,
-		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = size_of(checker_pixels)},
-	)
-	tex_ptr := sdl.MapGPUTransferBuffer(renderer.device, tex_transfer, false)
-	mem.copy(tex_ptr, &checker_pixels, size_of(checker_pixels))
-	sdl.UnmapGPUTransferBuffer(renderer.device, tex_transfer)
 
 	upload_cmd := sdl.AcquireGPUCommandBuffer(renderer.device)
 	copy_pass := sdl.BeginGPUCopyPass(upload_cmd)
@@ -194,20 +176,9 @@ main :: proc() {
 		sdl.GPUBufferRegion{buffer = vertex_buffer, offset = 0, size = size_of(ground_verts)},
 		false,
 	)
-	sdl.UploadToGPUTexture(
-		copy_pass,
-		sdl.GPUTextureTransferInfo {
-			transfer_buffer = tex_transfer,
-			pixels_per_row = CHECKER_SIZE,
-			rows_per_layer = CHECKER_SIZE,
-		},
-		sdl.GPUTextureRegion{texture = ground_texture, w = CHECKER_SIZE, h = CHECKER_SIZE, d = 1},
-		false,
-	)
 	sdl.EndGPUCopyPass(copy_pass)
 	assert(sdl.SubmitGPUCommandBuffer(upload_cmd), "failed to submit ground buffer and texture upload command")
 	sdl.ReleaseGPUTransferBuffer(renderer.device, vert_transfer)
-	sdl.ReleaseGPUTransferBuffer(renderer.device, tex_transfer)
 
 	// Sprite pipeline
 	sprite_vert := load_shader(renderer, "build/shaders/sprite.vert.spv", .VERTEX, 1, 0, scratch_allocator)
@@ -239,59 +210,8 @@ main :: proc() {
 	sdl.ReleaseGPUShader(renderer.device, sprite_vert)
 	sdl.ReleaseGPUShader(renderer.device, sprite_frag)
 
-	// Load sprite sheet
-	sprite_width, sprite_height, sprite_channels: c.int
-	sprite_pixels := stbi.load("assets/sprites/nate.png", &sprite_width, &sprite_height, &sprite_channels, 4)
-	if sprite_pixels == nil {
-		log.fatalf("Failed to load sprite sheet: %s", stbi.failure_reason())
-		panic("sprite load failed")
-	}
-	sprite_data_size := u32(sprite_width * sprite_height * 4)
-
-	sprite_texture := sdl.CreateGPUTexture(
-		renderer.device,
-		sdl.GPUTextureCreateInfo {
-			type = .D2,
-			format = .R8G8B8A8_UNORM,
-			width = u32(sprite_width),
-			height = u32(sprite_height),
-			layer_count_or_depth = 1,
-			num_levels = 1,
-			usage = {.SAMPLER},
-		},
-	)
-	if sprite_texture == nil {
-		log_sdl_fatal("Failed to create sprite texture")
-	}
-	defer sdl.ReleaseGPUTexture(renderer.device, sprite_texture)
-
-	// Upload sprite sheet to GPU
-	sprite_transfer := sdl.CreateGPUTransferBuffer(
-		renderer.device,
-		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = sprite_data_size},
-	)
-	sprite_ptr := sdl.MapGPUTransferBuffer(renderer.device, sprite_transfer, false)
-	mem.copy(sprite_ptr, sprite_pixels, int(sprite_data_size))
-	sdl.UnmapGPUTransferBuffer(renderer.device, sprite_transfer)
-
-	sprite_upload_cmd := sdl.AcquireGPUCommandBuffer(renderer.device)
-	sprite_copy_pass := sdl.BeginGPUCopyPass(sprite_upload_cmd)
-	sdl.UploadToGPUTexture(
-		sprite_copy_pass,
-		sdl.GPUTextureTransferInfo {
-			transfer_buffer = sprite_transfer,
-			pixels_per_row = u32(sprite_width),
-			rows_per_layer = u32(sprite_height),
-		},
-		sdl.GPUTextureRegion{texture = sprite_texture, w = u32(sprite_width), h = u32(sprite_height), d = 1},
-		false,
-	)
-	sdl.EndGPUCopyPass(sprite_copy_pass)
-	assert(sdl.SubmitGPUCommandBuffer(sprite_upload_cmd), "failed to upload sprite cmd buffer")
-	sdl.ReleaseGPUTransferBuffer(renderer.device, sprite_transfer)
-	stbi.image_free(sprite_pixels)
-
-	log.infof("Loaded sprite sheet: %dx%d", sprite_width, sprite_height)
+	sprite_texture := load_texture("assets/sprites/nate.png")
+	defer unload_texture(sprite_texture)
 
 	// Camera
 	cam := Camera {
@@ -299,12 +219,6 @@ main :: proc() {
 		distance = CameraDistDefault,
 		pitch    = CameraPitch,
 	}
-	proj := linalg.matrix4_perspective_f32(
-		math.to_radians(f32(45.0)),
-		f32(renderer.pixel_width) / f32(renderer.pixel_height),
-		0.1,
-		100.0,
-	)
 
 	// Frame timing
 	perf_freq := sdl.GetPerformanceFrequency()
@@ -433,12 +347,6 @@ main :: proc() {
 				new_h := u32(event.window.data2)
 				if new_w > 0 && new_h > 0 {
 					renderer_resize_viewport(new_w, new_h)
-					proj = linalg.matrix4_perspective_f32(
-						math.to_radians(f32(45.0)),
-						f32(new_w) / f32(new_h),
-						0.1,
-						100.0,
-					)
 				}
 			}
 		}
@@ -447,7 +355,7 @@ main :: proc() {
 		gather_input(&game.input)
 
 		// Camera update
-		view_proj: matrix[4, 4]f32
+		view_proj: linalg.Matrix4f32
 		cam_right: Vec3
 		cam_up: Vec3
 		if game.debug_mode {
@@ -471,7 +379,7 @@ main :: proc() {
 			if keyboard[sdl.Scancode.Q] do game.debug_cam.position.y -= move_speed
 
 			view := linalg.matrix4_look_at_f32(game.debug_cam.position, game.debug_cam.position + forward, {0, 1, 0})
-			view_proj = proj * view
+			view_proj = renderer.proj * view
 			cam_right = right
 			cam_up = linalg.cross(right, forward)
 		} else {
@@ -485,46 +393,17 @@ main :: proc() {
 			offset_z := cam.distance * math.cos(cam.pitch)
 			eye := cam.target + {0, offset_y, offset_z}
 			view := linalg.matrix4_look_at_f32(eye, cam.target, {0, 1, 0})
-			view_proj = proj * view
+			view_proj = renderer.proj * view
 			cam_right = {1, 0, 0}
 			cam_forward := Vec3{0, -math.sin(cam.pitch), -math.cos(cam.pitch)}
 			cam_up = linalg.cross(cam_right, cam_forward)
 		}
 
-		// Acquire command buffer
-		cmd := sdl.AcquireGPUCommandBuffer(renderer.device)
-		if cmd == nil {
-			log_sdl_error("Failed to acquire GPU command buffer")
+		cmd, render_pass, ok := renderer_begin_frame()
+		if !ok {
+			log_sdl_warn("failed to begin frame")
 			continue
 		}
-
-		// Acquire swapchain texture
-		swapchain_tex: ^sdl.GPUTexture
-		if !sdl.WaitAndAcquireGPUSwapchainTexture(cmd, renderer.window, &swapchain_tex, nil, nil) {
-			log_sdl_error("Failed to acquire GPU swapchain texture")
-			_ = sdl.SubmitGPUCommandBuffer(cmd)
-			continue
-		}
-		if swapchain_tex == nil {
-			// Window minimized or not visible — submit empty command buffer
-			_ = sdl.SubmitGPUCommandBuffer(cmd)
-			continue
-		}
-
-		// Begin render pass — clear to dark gray, clear depth to 1.0
-		color_target := sdl.GPUColorTargetInfo {
-			texture     = swapchain_tex,
-			load_op     = .CLEAR,
-			store_op    = .STORE,
-			clear_color = {0.1, 0.1, 0.1, 1.0},
-		}
-		depth_target := sdl.GPUDepthStencilTargetInfo {
-			texture     = renderer.depth_texture,
-			load_op     = .CLEAR,
-			store_op    = .STORE,
-			clear_depth = 1.0,
-		}
-		render_pass := sdl.BeginGPURenderPass(cmd, &color_target, 1, &depth_target)
 
 		// Draw ground plane
 		sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
@@ -536,7 +415,7 @@ main :: proc() {
 		sdl.PushGPUVertexUniformData(cmd, 0, &uniforms, size_of(Mesh_Uniforms))
 
 		tex_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
-			{texture = ground_texture, sampler = renderer.nearest_repeat_sampler},
+			{texture = ground_texture.sdl_texture, sampler = renderer.nearest_repeat_sampler},
 		}
 		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&tex_sampler_bindings), len(tex_sampler_bindings))
 
@@ -555,24 +434,19 @@ main :: proc() {
 			camera_up    = cam_up,
 			sprite_pos   = player.position,
 			sprite_size  = {1.5, 1.5},
-			atlas_size   = {f32(sprite_width), f32(sprite_height)},
+			atlas_size   = {f32(sprite_texture.width), f32(sprite_texture.height)},
 			sprite_rect  = {0, 33, 33, 33}, // idle down frame
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &sprite_uniforms, size_of(Sprite_Uniforms))
 
 		sprite_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
-			{texture = sprite_texture, sampler = renderer.nearest_clamp_sampler},
+			{texture = sprite_texture.sdl_texture, sampler = renderer.nearest_clamp_sampler},
 		}
 		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&sprite_sampler_bindings), len(sprite_sampler_bindings))
 
 		sdl.DrawGPUPrimitives(render_pass, 4, 1, 0, 0)
 
-		sdl.EndGPURenderPass(render_pass)
-
-		// Submit
-		if !sdl.SubmitGPUCommandBuffer(cmd) {
-			log_sdl_error("Failed to submit GPU command buffer")
-		}
+		renderer_end_frame(cmd, render_pass)
 
 		// Check for arena growth — means our initial sizes were too small
 		if permanent_arena.total_reserved != permanent_reserved {
@@ -644,4 +518,3 @@ log_sdl_fatal :: proc(msg: string, location := #caller_location) -> ! {
 	}
 	panic("fatal error encountered", loc = location)
 }
-

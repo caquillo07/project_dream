@@ -28,4 +28,3 @@ Debug_Camera :: struct {
 	pitch:    f32,
 	speed:    f32,
 }
-
