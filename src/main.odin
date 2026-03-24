@@ -41,32 +41,7 @@ Debug_Timing :: struct {
 	frame_ms: f32,
 }
 
-// Follow camera — fixed angle, follows target, scroll-wheel zoom (HGSS / Link's Awakening style)
-Camera :: struct {
-	target:   Vec3,
-	distance: f32,
-	pitch:    f32, // fixed angle from horizontal (radians)
-}
-
-CAMERA_PITCH :: 50.0 * math.RAD_PER_DEG
-CAMERA_DIST_MIN :: f32(5.0)
-CAMERA_DIST_MAX :: f32(30.0)
-CAMERA_DIST_DEFAULT :: f32(8.0)
-CAMERA_ZOOM_SPEED :: f32(1.5)
-CAMERA_PAN_SPEED :: f32(8.0) // temporary WASD panning until player exists
-
-// Debug free camera — F1 toggle, FPS-style controls
-Debug_Camera :: struct {
-	position: Vec3,
-	yaw:      f32,
-	pitch:    f32,
-	speed:    f32,
-}
-
-DEBUG_CAM_SPEED_DEFAULT :: f32(10.0)
-DEBUG_CAM_SPEED_MIN :: f32(1.0)
-DEBUG_CAM_SPEED_MAX :: f32(50.0)
-MOUSE_SENSITIVITY :: f32(0.003)
+renderer: Render_State
 
 main :: proc() {
 	context.logger = log.create_console_logger()
