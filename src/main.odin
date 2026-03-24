@@ -46,16 +46,6 @@ Button_State :: struct {
 	released: bool, // went up this frame
 }
 
-Game_Input :: struct {
-	move_up:    Button_State,
-	move_down:  Button_State,
-	move_left:  Button_State,
-	move_right: Button_State,
-	action_a:   Button_State, // confirm / interact
-	action_b:   Button_State, // cancel / back
-	dt:         f32,
-}
-
 Debug_Timing :: struct {
 	dt:       f32, // seconds
 	fps:      f32,
