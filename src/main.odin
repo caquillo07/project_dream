@@ -1,63 +1,21 @@
 package main
 
 import "base:intrinsics"
-import "core:c"
 import "core:fmt"
 import "core:log"
 import "core:math"
 import "core:math/linalg"
 import "core:mem"
 import vmem "core:mem/virtual"
-import "core:os"
 import sdl "vendor:sdl3"
-import stbi "vendor:stb/image"
 
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
-
-Vec4 :: [4]f32
-Vec3 :: [3]f32
-Vec2 :: [2]f32
-
-Mesh_Vertex :: struct {
-	position: Vec3,
-	uv:       Vec2,
-	normal:   Vec3,
-}
-
-Mesh_Uniforms :: struct {
-	view_proj: matrix[4, 4]f32,
-	model:     matrix[4, 4]f32,
-}
-
-// Must match sprite.vert.glsl SpriteUniforms (std140 layout)
-Sprite_Uniforms :: struct {
-	view_proj:    matrix[4, 4]f32,
-	camera_right: Vec3,
-	_pad0:        f32,
-	camera_up:    Vec3,
-	_pad1:        f32,
-	sprite_pos:   Vec3,
-	_pad2:        f32,
-	sprite_size:  Vec2,
-	atlas_size:   Vec2,
-	sprite_rect:  Vec4, // x, y, w, h in pixels
-}
 
 Button_State :: struct {
 	is_down:  bool, // held down right now
 	pressed:  bool, // went down this frame
 	released: bool, // went up this frame
-}
-
-Game_Input :: struct {
-	move_up:    Button_State,
-	move_down:  Button_State,
-	move_left:  Button_State,
-	move_right: Button_State,
-	action_a:   Button_State, // confirm / interact
-	action_b:   Button_State, // cancel / back
-	dt:         f32,
 }
 
 Debug_Timing :: struct {
@@ -66,80 +24,9 @@ Debug_Timing :: struct {
 	frame_ms: f32,
 }
 
-// Follow camera — fixed angle, follows target, scroll-wheel zoom (HGSS / Link's Awakening style)
-Camera :: struct {
-	target:   Vec3,
-	distance: f32,
-	pitch:    f32, // fixed angle from horizontal (radians)
-}
-
-CAMERA_PITCH :: 50.0 * math.RAD_PER_DEG
-CAMERA_DIST_MIN :: f32(5.0)
-CAMERA_DIST_MAX :: f32(30.0)
-CAMERA_DIST_DEFAULT :: f32(8.0)
-CAMERA_ZOOM_SPEED :: f32(1.5)
-CAMERA_PAN_SPEED :: f32(8.0) // temporary WASD panning until player exists
-
-// Debug free camera — F1 toggle, FPS-style controls
-Debug_Camera :: struct {
-	position: Vec3,
-	yaw:      f32,
-	pitch:    f32,
-	speed:    f32,
-}
-
-DEBUG_CAM_SPEED_DEFAULT :: f32(10.0)
-DEBUG_CAM_SPEED_MIN :: f32(1.0)
-DEBUG_CAM_SPEED_MAX :: f32(50.0)
-MOUSE_SENSITIVITY :: f32(0.003)
+renderer: Render_State
 
 main :: proc() {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
-
-	// Init SDL
-	if !sdl.Init({.VIDEO}) {
-		log_sdl_fatal("Failed to init SDL")
-	}
-	defer sdl.Quit()
-
-	// Create window
-	window := sdl.CreateWindow("Project Dream", WINDOW_WIDTH, WINDOW_HEIGHT, {.RESIZABLE})
-	if window == nil {
-		log_sdl_fatal("Failed to create window")
-	}
-	defer sdl.DestroyWindow(window)
-
-	// Init ShaderCross — runtime SPIR-V transpilation to native GPU format
-	if !ShaderCross_Init() {
-		log.fatalf("Failed to init ShaderCross: %s", sdl.GetError())
-		panic("ShaderCross init failed")
-	}
-	defer ShaderCross_Quit()
-
-	shader_formats := ShaderCross_GetSPIRVShaderFormats()
-	log.infof("ShaderCross supported formats: %v", shader_formats)
-
-	device := sdl.CreateGPUDevice(shader_formats, ODIN_DEBUG, nil)
-	if device == nil {
-		log_sdl_fatal("Failed to create GPU device")
-	}
-	defer sdl.DestroyGPUDevice(device)
-
-	// Claim window for GPU rendering
-	if !sdl.ClaimWindowForGPUDevice(device, window) {
-		log_sdl_fatal("Failed to claim window")
-	}
-
-	// Get actual pixel dimensions (may differ from logical on HiDPI/Retina)
-	pixel_w, pixel_h: c.int
-	assert(sdl.GetWindowSizeInPixels(window, &pixel_w, &pixel_h))
-	log.infof("Window: %dx%d logical, %dx%d pixels", WINDOW_WIDTH, WINDOW_HEIGHT, pixel_w, pixel_h)
-
-	// VSync on by default
-	vsync := true
-	assert(sdl.SetGPUSwapchainParameters(device, window, .SDR, .VSYNC))
-
 	// Game memory — growable virtual memory arenas
 	// Initial block sizes are our best guess. If they grow, we log it so we can tune.
 	permanent_arena: vmem.Arena
@@ -147,7 +34,6 @@ main :: proc() {
 		panic("Failed to init permanent arena")
 	}
 	permanent_allocator := vmem.arena_allocator(&permanent_arena)
-	context.allocator = permanent_allocator
 
 	scratch_arena: vmem.Arena
 	if vmem.arena_init_growing(&scratch_arena, 16 * mem.Megabyte) != nil {
@@ -156,7 +42,11 @@ main :: proc() {
 	scratch_allocator := vmem.arena_allocator(&scratch_arena)
 
 	// Own all temp memory — tprintf and friends go through our scratch arena
+	context.allocator = permanent_allocator
 	context.temp_allocator = scratch_allocator
+
+	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
 
 	// Track arena sizes so we can warn on growth and tune initial sizes
 	permanent_reserved := permanent_arena.total_reserved
@@ -164,74 +54,16 @@ main :: proc() {
 	log.infof("Permanent arena: %s reserved", format_bytes(permanent_reserved))
 	log.infof("Scratch arena: %s reserved", format_bytes(scratch_reserved))
 
-	// Load shaders (into scratch — bytes only needed until ShaderCross compiles them)
-	shader_count: int
-	shader_start := sdl.GetPerformanceCounter()
-
-	swapchain_format := sdl.GetGPUSwapchainTextureFormat(device, window)
-	log.infof("using swapchain format: %v", swapchain_format)
-
-	vert_shader := load_shader(device, "build/shaders/mesh.vert.spv", .VERTEX, 1, 0, scratch_allocator)
-	shader_count += 1
-	frag_shader := load_shader(device, "build/shaders/mesh.frag.spv", .FRAGMENT, 0, 1, scratch_allocator)
-	shader_count += 1
-
-	// Create mesh pipeline
-	vert_buf_descs := [?]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Mesh_Vertex), input_rate = .VERTEX}}
-	vert_attrs := [?]sdl.GPUVertexAttribute {
-		{location = 0, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, position))},
-		{location = 1, buffer_slot = 0, format = .FLOAT2, offset = u32(offset_of(Mesh_Vertex, uv))},
-		{location = 2, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, normal))},
+	// Init SDL
+	if !sdl.Init({.VIDEO}) {
+		log_sdl_fatal("Failed to init SDL")
 	}
-	color_target_descs := [?]sdl.GPUColorTargetDescription{{format = swapchain_format}}
+	defer sdl.Quit()
 
-	pipeline := sdl.CreateGPUGraphicsPipeline(
-		device,
-		sdl.GPUGraphicsPipelineCreateInfo {
-			vertex_shader = vert_shader,
-			fragment_shader = frag_shader,
-			vertex_input_state = {
-				vertex_buffer_descriptions = raw_data(&vert_buf_descs),
-				num_vertex_buffers = len(vert_buf_descs),
-				vertex_attributes = raw_data(&vert_attrs),
-				num_vertex_attributes = len(vert_attrs),
-			},
-			primitive_type = .TRIANGLELIST,
-			rasterizer_state = {fill_mode = .FILL, cull_mode = .BACK, front_face = .COUNTER_CLOCKWISE},
-			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = true},
-			target_info = {
-				color_target_descriptions = raw_data(&color_target_descs),
-				num_color_targets = len(color_target_descs),
-				depth_stencil_format = .D32_FLOAT,
-				has_depth_stencil_target = true,
-			},
-		},
-	)
-	if pipeline == nil {
-		log_sdl_fatal("Failed to create graphics pipeline")
-	}
-	defer sdl.ReleaseGPUGraphicsPipeline(device, pipeline)
-
-	sdl.ReleaseGPUShader(device, vert_shader)
-	sdl.ReleaseGPUShader(device, frag_shader)
-
-	// Depth buffer
-	depth_texture := sdl.CreateGPUTexture(
-		device,
-		sdl.GPUTextureCreateInfo {
-			type = .D2,
-			format = .D32_FLOAT,
-			width = u32(pixel_w),
-			height = u32(pixel_h),
-			layer_count_or_depth = 1,
-			num_levels = 1,
-			usage = {.DEPTH_STENCIL_TARGET},
-		},
-	)
-	if depth_texture == nil {
-		log_sdl_fatal("Failed to create depth texture")
-	}
-	defer sdl.ReleaseGPUTexture(device, depth_texture)
+	// init renderer, then clear the temp allocator to let the game start fresh
+	init_renderer()
+	defer deinit_renderer()
+	free_all(context.temp_allocator)
 
 	// Procedural checkerboard texture
 	CHECKER_SIZE :: 64
@@ -249,36 +81,12 @@ main :: proc() {
 		}
 	}
 
-	ground_texture := sdl.CreateGPUTexture(
-		device,
-		sdl.GPUTextureCreateInfo {
-			type = .D2,
-			format = .R8G8B8A8_UNORM,
-			width = CHECKER_SIZE,
-			height = CHECKER_SIZE,
-			layer_count_or_depth = 1,
-			num_levels = 1,
-			usage = {.SAMPLER},
-		},
+	ground_texture := load_texture_from_pixels(
+		CHECKER_SIZE,
+		CHECKER_SIZE,
+		checker_pixels[:],
 	)
-	if ground_texture == nil {
-		log_sdl_fatal("Failed to create ground texture")
-	}
-	defer sdl.ReleaseGPUTexture(device, ground_texture)
-
-	sampler := sdl.CreateGPUSampler(
-		device,
-		sdl.GPUSamplerCreateInfo {
-			min_filter = .NEAREST,
-			mag_filter = .NEAREST,
-			address_mode_u = .REPEAT,
-			address_mode_v = .REPEAT,
-		},
-	)
-	if sampler == nil {
-		log_sdl_fatal("Failed to create sampler")
-	}
-	defer sdl.ReleaseGPUSampler(device, sampler)
+	defer unload_texture(ground_texture)
 
 	// Ground quad — 6 vertices on XZ plane at Y=0
 	GROUND_HALF :: f32(10.0)
@@ -294,173 +102,18 @@ main :: proc() {
 		{{GROUND_HALF, 0, -GROUND_HALF}, {UV_TILES, 0}, {0, 1, 0}},
 	}
 
-	vertex_buffer := sdl.CreateGPUBuffer(
-		device,
-		sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = size_of(ground_verts)},
-	)
-	if vertex_buffer == nil {
-		log_sdl_fatal("Failed to create vertex buffer")
-	}
-	defer sdl.ReleaseGPUBuffer(device, vertex_buffer)
+	ground_mesh_vertex_buffer := renderer_upload_vertex_buffer(ground_verts[:])
+	defer renderer_release_vertex_buffer(ground_mesh_vertex_buffer)
 
-	// Upload ground quad + checkerboard texture via single copy pass
-	vert_transfer := sdl.CreateGPUTransferBuffer(
-		device,
-		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = size_of(ground_verts)},
-	)
-	vert_ptr := sdl.MapGPUTransferBuffer(device, vert_transfer, false)
-	mem.copy(vert_ptr, &ground_verts, size_of(ground_verts))
-	sdl.UnmapGPUTransferBuffer(device, vert_transfer)
-
-	tex_transfer := sdl.CreateGPUTransferBuffer(
-		device,
-		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = size_of(checker_pixels)},
-	)
-	tex_ptr := sdl.MapGPUTransferBuffer(device, tex_transfer, false)
-	mem.copy(tex_ptr, &checker_pixels, size_of(checker_pixels))
-	sdl.UnmapGPUTransferBuffer(device, tex_transfer)
-
-	upload_cmd := sdl.AcquireGPUCommandBuffer(device)
-	copy_pass := sdl.BeginGPUCopyPass(upload_cmd)
-	sdl.UploadToGPUBuffer(
-		copy_pass,
-		sdl.GPUTransferBufferLocation{transfer_buffer = vert_transfer, offset = 0},
-		sdl.GPUBufferRegion{buffer = vertex_buffer, offset = 0, size = size_of(ground_verts)},
-		false,
-	)
-	sdl.UploadToGPUTexture(
-		copy_pass,
-		sdl.GPUTextureTransferInfo {
-			transfer_buffer = tex_transfer,
-			pixels_per_row = CHECKER_SIZE,
-			rows_per_layer = CHECKER_SIZE,
-		},
-		sdl.GPUTextureRegion{texture = ground_texture, w = CHECKER_SIZE, h = CHECKER_SIZE, d = 1},
-		false,
-	)
-	sdl.EndGPUCopyPass(copy_pass)
-	assert(sdl.SubmitGPUCommandBuffer(upload_cmd), "failed to submit ground buffer and texture upload command")
-	sdl.ReleaseGPUTransferBuffer(device, vert_transfer)
-	sdl.ReleaseGPUTransferBuffer(device, tex_transfer)
-
-	// Sprite pipeline
-	sprite_vert := load_shader(device, "build/shaders/sprite.vert.spv", .VERTEX, 1, 0, scratch_allocator)
-	shader_count += 1
-	sprite_frag := load_shader(device, "build/shaders/sprite.frag.spv", .FRAGMENT, 0, 1, scratch_allocator)
-	shader_count += 1
-
-	sprite_pipeline := sdl.CreateGPUGraphicsPipeline(
-		device,
-		sdl.GPUGraphicsPipelineCreateInfo {
-			vertex_shader = sprite_vert,
-			fragment_shader = sprite_frag,
-			primitive_type = .TRIANGLESTRIP,
-			rasterizer_state = {fill_mode = .FILL, cull_mode = .NONE},
-			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = true},
-			target_info = {
-				color_target_descriptions = raw_data(&color_target_descs),
-				num_color_targets = len(color_target_descs),
-				depth_stencil_format = .D32_FLOAT,
-				has_depth_stencil_target = true,
-			},
-		},
-	)
-	if sprite_pipeline == nil {
-		log_sdl_fatal("Failed to create sprite pipeline")
-	}
-	defer sdl.ReleaseGPUGraphicsPipeline(device, sprite_pipeline)
-
-	sdl.ReleaseGPUShader(device, sprite_vert)
-	sdl.ReleaseGPUShader(device, sprite_frag)
-
-	sprite_sampler := sdl.CreateGPUSampler(
-		device,
-		sdl.GPUSamplerCreateInfo {
-			min_filter = .NEAREST,
-			mag_filter = .NEAREST,
-			address_mode_u = .CLAMP_TO_EDGE,
-			address_mode_v = .CLAMP_TO_EDGE,
-		},
-	)
-	if sprite_sampler == nil {
-		log_sdl_fatal("Failed to create sprite sampler")
-	}
-	defer sdl.ReleaseGPUSampler(device, sprite_sampler)
-
-	// Load sprite sheet
-	sprite_width, sprite_height, sprite_channels: c.int
-	sprite_pixels := stbi.load("assets/sprites/nate.png", &sprite_width, &sprite_height, &sprite_channels, 4)
-	if sprite_pixels == nil {
-		log.fatalf("Failed to load sprite sheet: %s", stbi.failure_reason())
-		panic("sprite load failed")
-	}
-	sprite_data_size := u32(sprite_width * sprite_height * 4)
-
-	sprite_texture := sdl.CreateGPUTexture(
-		device,
-		sdl.GPUTextureCreateInfo {
-			type = .D2,
-			format = .R8G8B8A8_UNORM,
-			width = u32(sprite_width),
-			height = u32(sprite_height),
-			layer_count_or_depth = 1,
-			num_levels = 1,
-			usage = {.SAMPLER},
-		},
-	)
-	if sprite_texture == nil {
-		log_sdl_fatal("Failed to create sprite texture")
-	}
-	defer sdl.ReleaseGPUTexture(device, sprite_texture)
-
-	// Upload sprite sheet to GPU
-	sprite_transfer := sdl.CreateGPUTransferBuffer(
-		device,
-		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = sprite_data_size},
-	)
-	sprite_ptr := sdl.MapGPUTransferBuffer(device, sprite_transfer, false)
-	mem.copy(sprite_ptr, sprite_pixels, int(sprite_data_size))
-	sdl.UnmapGPUTransferBuffer(device, sprite_transfer)
-
-	sprite_upload_cmd := sdl.AcquireGPUCommandBuffer(device)
-	sprite_copy_pass := sdl.BeginGPUCopyPass(sprite_upload_cmd)
-	sdl.UploadToGPUTexture(
-		sprite_copy_pass,
-		sdl.GPUTextureTransferInfo {
-			transfer_buffer = sprite_transfer,
-			pixels_per_row = u32(sprite_width),
-			rows_per_layer = u32(sprite_height),
-		},
-		sdl.GPUTextureRegion{texture = sprite_texture, w = u32(sprite_width), h = u32(sprite_height), d = 1},
-		false,
-	)
-	sdl.EndGPUCopyPass(sprite_copy_pass)
-	assert(sdl.SubmitGPUCommandBuffer(sprite_upload_cmd), "failed to upload sprite cmd buffer")
-	sdl.ReleaseGPUTransferBuffer(device, sprite_transfer)
-	stbi.image_free(sprite_pixels)
-
-	log.infof("Loaded sprite sheet: %dx%d", sprite_width, sprite_height)
+	sprite_texture := load_texture("assets/sprites/nate.png")
+	defer unload_texture(sprite_texture)
 
 	// Camera
 	cam := Camera {
 		target   = {0, 0, 0},
-		distance = CAMERA_DIST_DEFAULT,
-		pitch    = CAMERA_PITCH,
+		distance = CameraDistDefault,
+		pitch    = CameraPitch,
 	}
-	proj := linalg.matrix4_perspective_f32(math.to_radians(f32(45.0)), f32(pixel_w) / f32(pixel_h), 0.1, 100.0)
-
-	// Debug camera state
-	debug_mode: bool
-	debug_cam: Debug_Camera
-	saved_cam: Camera
-
-	// Frame timing
-	perf_freq := sdl.GetPerformanceFrequency()
-	last_counter := sdl.GetPerformanceCounter()
-
-	// Input state
-	input: Game_Input
-	debug_timing: Debug_Timing
 
 	// Title bar timing display — sampled every 0.5s
 	TITLE_UPDATE_INTERVAL :: 0.5
@@ -470,33 +123,30 @@ main :: proc() {
 	title_ms_min: f32 = 999.0
 	title_ms_max: f32
 
-	// Report shader compilation time
-	shader_elapsed := f32(sdl.GetPerformanceCounter() - shader_start) / f32(perf_freq) * 1000.0
-	log.infof("Shader compilation: %.2fms (%d shaders)", shader_elapsed, shader_count)
-
-	// Main loop
+	// Main loop and Frame timing
+	last_frame_counter := time_now()
 	running := true
 	for running {
 		// Measure frame time
-		now := sdl.GetPerformanceCounter()
-		input.dt = f32(now - last_counter) / f32(perf_freq)
-		last_counter = now
+		now := time_now()
+		game.input.dt = elapsed(last_frame_counter)
+		last_frame_counter = now
 
-		debug_timing.dt = input.dt
-		debug_timing.frame_ms = input.dt * 1000.0
-		debug_timing.fps = input.dt > 0 ? 1.0 / input.dt : 0
+		game.debug_timing.dt = game.input.dt
+		game.debug_timing.frame_ms = game.input.dt * 1000.0
+		game.debug_timing.fps = game.input.dt > 0 ? 1.0 / game.input.dt : 0
 
 		// Accumulate timing samples, update title periodically
-		title_accumulator += debug_timing.dt
+		title_accumulator += game.debug_timing.dt
 		title_frame_count += 1
-		title_ms_sum += debug_timing.frame_ms
-		title_ms_min = min(title_ms_min, debug_timing.frame_ms)
-		title_ms_max = max(title_ms_max, debug_timing.frame_ms)
+		title_ms_sum += game.debug_timing.frame_ms
+		title_ms_min = min(title_ms_min, game.debug_timing.frame_ms)
+		title_ms_max = max(title_ms_max, game.debug_timing.frame_ms)
 
 		if title_accumulator >= TITLE_UPDATE_INTERVAL {
 			avg_ms := title_ms_sum / f32(title_frame_count)
 			sdl.SetWindowTitle(
-				window,
+				renderer.window,
 				fmt.ctprintf(
 					"Project Dream | %.1fms avg | %.1f / %.1f min/max | %.0f fps",
 					avg_ms,
@@ -522,169 +172,129 @@ main :: proc() {
 				case .ESCAPE:
 					running = false
 				case .F1:
-					if !debug_mode {
+					if !game.debug_mode {
 						// Enter debug mode — save follow camera, init debug camera at current eye position
-						saved_cam = cam
+						game.saved_cam = cam
 						offset_y := cam.distance * math.sin(cam.pitch)
 						offset_z := cam.distance * math.cos(cam.pitch)
-						debug_cam = Debug_Camera {
+						game.debug_cam = Debug_Camera {
 							position = cam.target + {0, offset_y, offset_z},
 							yaw      = 0,
 							pitch    = -cam.pitch, // looking down at target
-							speed    = DEBUG_CAM_SPEED_DEFAULT,
+							speed    = DebugCamSpeedDefault,
 						}
-						debug_mode = true
-						assert(sdl.SetWindowRelativeMouseMode(window, true), "failed to set relative mouse mode")
+						game.debug_mode = true
+						assert(
+							sdl.SetWindowRelativeMouseMode(renderer.window, true),
+							"failed to set relative mouse mode",
+						)
 						log.infof("Debug camera ON")
 					} else {
 						// Exit debug mode — restore follow camera
-						cam = saved_cam
-						debug_mode = false
-						assert(sdl.SetWindowRelativeMouseMode(window, false), "failed to set relative mouse mode")
+						cam = game.saved_cam
+						game.debug_mode = false
+						assert(
+							sdl.SetWindowRelativeMouseMode(renderer.window, false),
+							"failed to set relative mouse mode",
+						)
 						log.infof("Debug camera OFF")
 					}
 				case .V:
-					if debug_mode {
-						vsync = !vsync
-						_ = sdl.SetGPUSwapchainParameters(device, window, .SDR, vsync ? .VSYNC : .IMMEDIATE)
-						log.infof("VSync: %s", vsync ? "ON" : "OFF")
+					if game.debug_mode {
+						renderer.vsync = !renderer.vsync // todo - should live on platform?
+						renderer_enable_vsync(renderer.vsync)
+						log.infof("VSync: %s", renderer.vsync ? "ON" : "OFF")
 					}
 				}
 			case .MOUSE_WHEEL:
-				if debug_mode {
-					// Scroll adjusts debug camera speed
-					debug_cam.speed = clamp(
-						debug_cam.speed + event.wheel.y * 2.0,
-						DEBUG_CAM_SPEED_MIN,
-						DEBUG_CAM_SPEED_MAX,
+				if game.debug_mode {
+					// Scroll adjusts debug camera game.speed
+					game.debug_cam.speed = clamp(
+						game.debug_cam.speed + event.wheel.y * 2.0,
+						DebugCamSpeedMin,
+						DebugCamSpeedMax,
 					)
 				} else {
 					// Scroll zooms follow camera
-					cam.distance -= event.wheel.y * CAMERA_ZOOM_SPEED
-					cam.distance = clamp(cam.distance, CAMERA_DIST_MIN, CAMERA_DIST_MAX)
+					cam.distance -= event.wheel.y * CameraZoomSpeed
+					cam.distance = clamp(cam.distance, CameraDistMin, CameraDistMax)
 				}
 			case .MOUSE_MOTION:
-				if debug_mode {
-					debug_cam.yaw += event.motion.xrel * MOUSE_SENSITIVITY
-					debug_cam.pitch -= event.motion.yrel * MOUSE_SENSITIVITY
-					debug_cam.pitch = clamp(debug_cam.pitch, -85.0 * math.RAD_PER_DEG, 85.0 * math.RAD_PER_DEG)
+				if game.debug_mode {
+					game.debug_cam.yaw += event.motion.xrel * MouseSensitivity
+					game.debug_cam.pitch -= event.motion.yrel * MouseSensitivity
+					game.debug_cam.pitch = clamp(
+						game.debug_cam.pitch,
+						-85.0 * math.RAD_PER_DEG,
+						85.0 * math.RAD_PER_DEG,
+					)
 				}
 			case .WINDOW_PIXEL_SIZE_CHANGED:
 				log.info("WINDOW_PIXEL_SIZE_CHANGED event fired")
 				new_w := u32(event.window.data1)
 				new_h := u32(event.window.data2)
 				if new_w > 0 && new_h > 0 {
-					sdl.ReleaseGPUTexture(device, depth_texture)
-					depth_texture = sdl.CreateGPUTexture(
-						device,
-						sdl.GPUTextureCreateInfo {
-							type = .D2,
-							format = .D32_FLOAT,
-							width = new_w,
-							height = new_h,
-							layer_count_or_depth = 1,
-							num_levels = 1,
-							usage = {.DEPTH_STENCIL_TARGET},
-						},
-					)
-					if depth_texture == nil {
-						log_sdl_fatal("Failed to recreate depth texture on resize")
-					}
-					proj = linalg.matrix4_perspective_f32(
-						math.to_radians(f32(45.0)),
-						f32(new_w) / f32(new_h),
-						0.1,
-						100.0,
-					)
+					renderer_resize_viewport(new_w, new_h)
 				}
 			}
 		}
 
 		// Gather input from keyboard state
-		gather_input(&input)
+		gather_input(&game.input)
 
 		// Camera update
-		view_proj: matrix[4, 4]f32
+		view_proj: linalg.Matrix4f32
 		cam_right: Vec3
 		cam_up: Vec3
-		if debug_mode {
+		if game.debug_mode {
 			// Debug free camera — WASD movement along view vectors
 			forward := Vec3 {
-				math.sin(debug_cam.yaw) * math.cos(debug_cam.pitch),
-				math.sin(debug_cam.pitch),
-				-math.cos(debug_cam.yaw) * math.cos(debug_cam.pitch),
+				math.sin(game.debug_cam.yaw) * math.cos(game.debug_cam.pitch),
+				math.sin(game.debug_cam.pitch),
+				-math.cos(game.debug_cam.yaw) * math.cos(game.debug_cam.pitch),
 			}
-			right := Vec3{math.cos(debug_cam.yaw), 0, math.sin(debug_cam.yaw)}
-			move_speed := debug_cam.speed * input.dt
+			right := Vec3{math.cos(game.debug_cam.yaw), 0, math.sin(game.debug_cam.yaw)}
+			move_speed := game.debug_cam.speed * game.input.dt
 
-			if input.move_up.is_down do debug_cam.position += forward * move_speed
-			if input.move_down.is_down do debug_cam.position -= forward * move_speed
-			if input.move_right.is_down do debug_cam.position += right * move_speed
-			if input.move_left.is_down do debug_cam.position -= right * move_speed
+			if game.input.move_up.is_down do game.debug_cam.position += forward * move_speed
+			if game.input.move_down.is_down do game.debug_cam.position -= forward * move_speed
+			if game.input.move_right.is_down do game.debug_cam.position += right * move_speed
+			if game.input.move_left.is_down do game.debug_cam.position -= right * move_speed
 
 			// todo(hector) - move these to the input layer?
 			keyboard := sdl.GetKeyboardState(nil)
-			if keyboard[sdl.Scancode.E] do debug_cam.position.y += move_speed
-			if keyboard[sdl.Scancode.Q] do debug_cam.position.y -= move_speed
+			if keyboard[sdl.Scancode.E] do game.debug_cam.position.y += move_speed
+			if keyboard[sdl.Scancode.Q] do game.debug_cam.position.y -= move_speed
 
-			view := linalg.matrix4_look_at_f32(debug_cam.position, debug_cam.position + forward, {0, 1, 0})
-			view_proj = proj * view
+			view := linalg.matrix4_look_at_f32(game.debug_cam.position, game.debug_cam.position + forward, {0, 1, 0})
+			view_proj = renderer.proj * view
 			cam_right = right
 			cam_up = linalg.cross(right, forward)
 		} else {
 			// Follow camera — WASD pans target (temporary until player exists)
-			if input.move_up.is_down do cam.target.z -= CAMERA_PAN_SPEED * input.dt
-			if input.move_down.is_down do cam.target.z += CAMERA_PAN_SPEED * input.dt
-			if input.move_left.is_down do cam.target.x -= CAMERA_PAN_SPEED * input.dt
-			if input.move_right.is_down do cam.target.x += CAMERA_PAN_SPEED * input.dt
+			if game.input.move_up.is_down do cam.target.z -= CameraPanSpeed * game.input.dt
+			if game.input.move_down.is_down do cam.target.z += CameraPanSpeed * game.input.dt
+			if game.input.move_left.is_down do cam.target.x -= CameraPanSpeed * game.input.dt
+			if game.input.move_right.is_down do cam.target.x += CameraPanSpeed * game.input.dt
 
 			offset_y := cam.distance * math.sin(cam.pitch)
 			offset_z := cam.distance * math.cos(cam.pitch)
 			eye := cam.target + {0, offset_y, offset_z}
 			view := linalg.matrix4_look_at_f32(eye, cam.target, {0, 1, 0})
-			view_proj = proj * view
+			view_proj = renderer.proj * view
 			cam_right = {1, 0, 0}
 			cam_forward := Vec3{0, -math.sin(cam.pitch), -math.cos(cam.pitch)}
 			cam_up = linalg.cross(cam_right, cam_forward)
 		}
 
-		// Acquire command buffer
-		cmd := sdl.AcquireGPUCommandBuffer(device)
-		if cmd == nil {
-			log_sdl_error("Failed to acquire GPU command buffer")
+		cmd, render_pass, ok := renderer_begin_frame()
+		if !ok {
+			log_sdl_warn("failed to begin frame")
 			continue
 		}
-
-		// Acquire swapchain texture
-		swapchain_tex: ^sdl.GPUTexture
-		if !sdl.WaitAndAcquireGPUSwapchainTexture(cmd, window, &swapchain_tex, nil, nil) {
-			log_sdl_error("Failed to acquire GPU swapchain texture")
-			_ = sdl.SubmitGPUCommandBuffer(cmd)
-			continue
-		}
-		if swapchain_tex == nil {
-			// Window minimized or not visible — submit empty command buffer
-			_ = sdl.SubmitGPUCommandBuffer(cmd)
-			continue
-		}
-
-		// Begin render pass — clear to dark gray, clear depth to 1.0
-		color_target := sdl.GPUColorTargetInfo {
-			texture     = swapchain_tex,
-			load_op     = .CLEAR,
-			store_op    = .STORE,
-			clear_color = {0.1, 0.1, 0.1, 1.0},
-		}
-		depth_target := sdl.GPUDepthStencilTargetInfo {
-			texture     = depth_texture,
-			load_op     = .CLEAR,
-			store_op    = .STORE,
-			clear_depth = 1.0,
-		}
-		render_pass := sdl.BeginGPURenderPass(cmd, &color_target, 1, &depth_target)
 
 		// Draw ground plane
-		sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
+		sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.Mesh))
 
 		uniforms := Mesh_Uniforms {
 			view_proj = view_proj,
@@ -692,40 +302,43 @@ main :: proc() {
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &uniforms, size_of(Mesh_Uniforms))
 
-		tex_sampler_bindings := [?]sdl.GPUTextureSamplerBinding{{texture = ground_texture, sampler = sampler}}
+		// todo - bind_fragment_texture
+		tex_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
+			{texture = ground_texture.sdl_texture, sampler = renderer.nearest_repeat_sampler},
+		}
 		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&tex_sampler_bindings), len(tex_sampler_bindings))
+		// todo - end of bind_fragment_texture
 
-		vbuf_bindings := [?]sdl.GPUBufferBinding{{buffer = vertex_buffer, offset = 0}}
+		vbuf_bindings := [?]sdl.GPUBufferBinding{{buffer = ground_mesh_vertex_buffer, offset = 0}}
 		sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&vbuf_bindings), len(vbuf_bindings))
 		sdl.DrawGPUPrimitives(render_pass, 6, 1, 0, 0)
 
 		// Draw sprite
-		sdl.BindGPUGraphicsPipeline(render_pass, sprite_pipeline)
+		player := get_player()
+		player.position = {0, 0, 0}
+		sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.Sprite))
 
 		sprite_uniforms := Sprite_Uniforms {
 			view_proj    = view_proj,
 			camera_right = cam_right,
 			camera_up    = cam_up,
-			sprite_pos   = {0, 0, 0},
+			sprite_pos   = player.position,
 			sprite_size  = {1.5, 1.5},
-			atlas_size   = {f32(sprite_width), f32(sprite_height)},
+			atlas_size   = {f32(sprite_texture.width), f32(sprite_texture.height)},
 			sprite_rect  = {0, 33, 33, 33}, // idle down frame
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &sprite_uniforms, size_of(Sprite_Uniforms))
 
+		// todo - bind_fragment_texture
 		sprite_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
-			{texture = sprite_texture, sampler = sprite_sampler},
+			{texture = sprite_texture.sdl_texture, sampler = renderer.nearest_clamp_sampler},
 		}
 		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&sprite_sampler_bindings), len(sprite_sampler_bindings))
+		// todo - end of bind_fragment_texture
 
 		sdl.DrawGPUPrimitives(render_pass, 4, 1, 0, 0)
 
-		sdl.EndGPURenderPass(render_pass)
-
-		// Submit
-		if !sdl.SubmitGPUCommandBuffer(cmd) {
-			log_sdl_error("Failed to submit GPU command buffer")
-		}
+		renderer_end_frame(cmd, render_pass)
 
 		// Check for arena growth — means our initial sizes were too small
 		if permanent_arena.total_reserved != permanent_reserved {
@@ -746,46 +359,8 @@ main :: proc() {
 		}
 
 		// Wipe scratch — everything allocated this frame is gone
-		free_all(scratch_allocator)
+		free_all(context.temp_allocator)
 	}
-}
-
-load_shader :: proc(
-	device: ^sdl.GPUDevice,
-	spv_path: string,
-	stage: sdl.GPUShaderStage,
-	num_uniform_buffers: u32,
-	num_samplers: u32,
-	allocator: mem.Allocator,
-) -> ^sdl.GPUShader {
-	code, read_err := os.read_entire_file(spv_path, allocator)
-	if read_err != nil {
-		log.fatalf("Failed to load shader: %s", spv_path)
-		panic("shader load failed")
-	}
-
-	sc_stage: ShaderCross_ShaderStage = stage == .VERTEX ? .VERTEX : .FRAGMENT
-
-	shader := ShaderCross_CompileGraphicsShaderFromSPIRV(
-		device,
-		&ShaderCross_SPIRV_Info {
-			bytecode = raw_data(code),
-			bytecode_size = c.size_t(len(code)),
-			entrypoint = "main",
-			shader_stage = sc_stage,
-		},
-		&ShaderCross_GraphicsShaderResourceInfo {
-			num_samplers = num_samplers,
-			num_uniform_buffers = num_uniform_buffers,
-		},
-		0,
-	)
-
-	if shader == nil {
-		log.fatalf("Failed to compile shader: %s: %s", spv_path, sdl.GetError())
-		panic("shader compilation failed")
-	}
-	return shader
 }
 
 update_button :: proc(button: ^Button_State, is_down: bool) {
@@ -806,6 +381,18 @@ gather_input :: proc(input: ^Game_Input) {
 	update_button(&input.action_b, keyboard[sdl.Scancode.E]) // TODO: conflicts with debug camera fly-up (E/Q) — resolve when game actions are wired
 }
 
+time_now :: proc() -> u64 {
+	return u64(sdl.GetPerformanceCounter())
+}
+
+elapsed_ms :: proc(start: u64) -> f32 {
+	return elapsed(start) * 1000.0
+}
+
+elapsed :: proc(start: u64) -> f32 {
+	return f32(sdl.GetPerformanceCounter() - start) / f32(sdl.GetPerformanceFrequency())
+}
+
 format_bytes :: proc(bytes: uint) -> string {
 	GB :: 1024 * 1024 * 1024
 	MB :: 1024 * 1024
@@ -818,6 +405,10 @@ format_bytes :: proc(bytes: uint) -> string {
 		return fmt.tprintf("%.2f KB", f64(bytes) / f64(KB))
 	}
 	return fmt.tprintf("%v B", bytes)
+}
+
+log_sdl_warn :: proc(msg: string, location := #caller_location) {
+	log.warnf("%s: %s", msg, sdl.GetError(), location = location)
 }
 
 log_sdl_error :: proc(msg: string, location := #caller_location) {
