@@ -1,7 +1,6 @@
 package main
 
 import "base:intrinsics"
-import "core:c"
 import "core:fmt"
 import "core:log"
 import "core:math"
@@ -28,18 +27,6 @@ Debug_Timing :: struct {
 renderer: Render_State
 
 main :: proc() {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
-
-	// Init SDL
-	if !sdl.Init({.VIDEO}) {
-		log_sdl_fatal("Failed to init SDL")
-	}
-	defer sdl.Quit()
-
-	init_renderer()
-	defer deinit_renderer()
-
 	// Game memory — growable virtual memory arenas
 	// Initial block sizes are our best guess. If they grow, we log it so we can tune.
 	permanent_arena: vmem.Arena
@@ -47,7 +34,6 @@ main :: proc() {
 		panic("Failed to init permanent arena")
 	}
 	permanent_allocator := vmem.arena_allocator(&permanent_arena)
-	context.allocator = permanent_allocator
 
 	scratch_arena: vmem.Arena
 	if vmem.arena_init_growing(&scratch_arena, 16 * mem.Megabyte) != nil {
@@ -56,7 +42,11 @@ main :: proc() {
 	scratch_allocator := vmem.arena_allocator(&scratch_arena)
 
 	// Own all temp memory — tprintf and friends go through our scratch arena
+	context.allocator = permanent_allocator
 	context.temp_allocator = scratch_allocator
+
+	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
 
 	// Track arena sizes so we can warn on growth and tune initial sizes
 	permanent_reserved := permanent_arena.total_reserved
@@ -64,53 +54,16 @@ main :: proc() {
 	log.infof("Permanent arena: %s reserved", format_bytes(permanent_reserved))
 	log.infof("Scratch arena: %s reserved", format_bytes(scratch_reserved))
 
-	// Load shaders (into scratch — bytes only needed until ShaderCross compiles them)
-	shader_count: int
-	shader_start := sdl.GetPerformanceCounter()
-
-	vert_shader := load_shader(renderer, "build/shaders/mesh.vert.spv", .VERTEX, 1, 0, scratch_allocator)
-	shader_count += 1
-	frag_shader := load_shader(renderer, "build/shaders/mesh.frag.spv", .FRAGMENT, 0, 1, scratch_allocator)
-	shader_count += 1
-
-	// Create mesh pipeline
-	vert_buf_descs := [?]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Mesh_Vertex), input_rate = .VERTEX}}
-	vert_attrs := [?]sdl.GPUVertexAttribute {
-		{location = 0, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, position))},
-		{location = 1, buffer_slot = 0, format = .FLOAT2, offset = u32(offset_of(Mesh_Vertex, uv))},
-		{location = 2, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, normal))},
+	// Init SDL
+	if !sdl.Init({.VIDEO}) {
+		log_sdl_fatal("Failed to init SDL")
 	}
-	color_target_descs := [?]sdl.GPUColorTargetDescription{{format = renderer.swapchain_format}}
+	defer sdl.Quit()
 
-	pipeline := sdl.CreateGPUGraphicsPipeline(
-		renderer.device,
-		sdl.GPUGraphicsPipelineCreateInfo {
-			vertex_shader = vert_shader,
-			fragment_shader = frag_shader,
-			vertex_input_state = {
-				vertex_buffer_descriptions = raw_data(&vert_buf_descs),
-				num_vertex_buffers = len(vert_buf_descs),
-				vertex_attributes = raw_data(&vert_attrs),
-				num_vertex_attributes = len(vert_attrs),
-			},
-			primitive_type = .TRIANGLELIST,
-			rasterizer_state = {fill_mode = .FILL, cull_mode = .BACK, front_face = .COUNTER_CLOCKWISE},
-			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = true},
-			target_info = {
-				color_target_descriptions = raw_data(&color_target_descs),
-				num_color_targets = len(color_target_descs),
-				depth_stencil_format = .D32_FLOAT,
-				has_depth_stencil_target = true,
-			},
-		},
-	)
-	if pipeline == nil {
-		log_sdl_fatal("Failed to create graphics pipeline")
-	}
-	defer sdl.ReleaseGPUGraphicsPipeline(renderer.device, pipeline)
-
-	sdl.ReleaseGPUShader(renderer.device, vert_shader)
-	sdl.ReleaseGPUShader(renderer.device, frag_shader)
+	// init renderer, then clear the temp allocator to let the game start fresh
+	init_renderer()
+	defer deinit_renderer()
+	free_all(context.temp_allocator)
 
 	// Procedural checkerboard texture
 	CHECKER_SIZE :: 64
@@ -131,8 +84,7 @@ main :: proc() {
 	ground_texture := load_texture_from_pixels(
 		CHECKER_SIZE,
 		CHECKER_SIZE,
-		raw_data(checker_pixels[:]),
-		size_of(checker_pixels),
+		checker_pixels[:],
 	)
 	defer unload_texture(ground_texture)
 
@@ -150,65 +102,8 @@ main :: proc() {
 		{{GROUND_HALF, 0, -GROUND_HALF}, {UV_TILES, 0}, {0, 1, 0}},
 	}
 
-	vertex_buffer := sdl.CreateGPUBuffer(
-		renderer.device,
-		sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = size_of(ground_verts)},
-	)
-	if vertex_buffer == nil {
-		log_sdl_fatal("Failed to create vertex buffer")
-	}
-	defer sdl.ReleaseGPUBuffer(renderer.device, vertex_buffer)
-
-	// Upload ground quad to GPU with a copy pass
-	vert_transfer := sdl.CreateGPUTransferBuffer(
-		renderer.device,
-		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = size_of(ground_verts)},
-	)
-	vert_ptr := sdl.MapGPUTransferBuffer(renderer.device, vert_transfer, false)
-	mem.copy(vert_ptr, &ground_verts, size_of(ground_verts))
-	sdl.UnmapGPUTransferBuffer(renderer.device, vert_transfer)
-
-	upload_cmd := sdl.AcquireGPUCommandBuffer(renderer.device)
-	copy_pass := sdl.BeginGPUCopyPass(upload_cmd)
-	sdl.UploadToGPUBuffer(
-		copy_pass,
-		sdl.GPUTransferBufferLocation{transfer_buffer = vert_transfer, offset = 0},
-		sdl.GPUBufferRegion{buffer = vertex_buffer, offset = 0, size = size_of(ground_verts)},
-		false,
-	)
-	sdl.EndGPUCopyPass(copy_pass)
-	assert(sdl.SubmitGPUCommandBuffer(upload_cmd), "failed to submit ground buffer and texture upload command")
-	sdl.ReleaseGPUTransferBuffer(renderer.device, vert_transfer)
-
-	// Sprite pipeline
-	sprite_vert := load_shader(renderer, "build/shaders/sprite.vert.spv", .VERTEX, 1, 0, scratch_allocator)
-	shader_count += 1
-	sprite_frag := load_shader(renderer, "build/shaders/sprite.frag.spv", .FRAGMENT, 0, 1, scratch_allocator)
-	shader_count += 1
-
-	sprite_pipeline := sdl.CreateGPUGraphicsPipeline(
-		renderer.device,
-		sdl.GPUGraphicsPipelineCreateInfo {
-			vertex_shader = sprite_vert,
-			fragment_shader = sprite_frag,
-			primitive_type = .TRIANGLESTRIP,
-			rasterizer_state = {fill_mode = .FILL, cull_mode = .NONE},
-			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = true},
-			target_info = {
-				color_target_descriptions = raw_data(&color_target_descs),
-				num_color_targets = len(color_target_descs),
-				depth_stencil_format = .D32_FLOAT,
-				has_depth_stencil_target = true,
-			},
-		},
-	)
-	if sprite_pipeline == nil {
-		log_sdl_fatal("Failed to create sprite pipeline")
-	}
-	defer sdl.ReleaseGPUGraphicsPipeline(renderer.device, sprite_pipeline)
-
-	sdl.ReleaseGPUShader(renderer.device, sprite_vert)
-	sdl.ReleaseGPUShader(renderer.device, sprite_frag)
+	ground_mesh_vertex_buffer := renderer_upload_vertex_buffer(ground_verts[:])
+	defer renderer_release_vertex_buffer(ground_mesh_vertex_buffer)
 
 	sprite_texture := load_texture("assets/sprites/nate.png")
 	defer unload_texture(sprite_texture)
@@ -220,10 +115,6 @@ main :: proc() {
 		pitch    = CameraPitch,
 	}
 
-	// Frame timing
-	perf_freq := sdl.GetPerformanceFrequency()
-	last_counter := sdl.GetPerformanceCounter()
-
 	// Title bar timing display — sampled every 0.5s
 	TITLE_UPDATE_INTERVAL :: 0.5
 	title_accumulator: f32
@@ -232,17 +123,14 @@ main :: proc() {
 	title_ms_min: f32 = 999.0
 	title_ms_max: f32
 
-	// Report shader compilation time
-	shader_elapsed := f32(sdl.GetPerformanceCounter() - shader_start) / f32(perf_freq) * 1000.0
-	log.infof("Shader compilation: %.2fms (%d shaders)", shader_elapsed, shader_count)
-
-	// Main loop
+	// Main loop and Frame timing
+	last_frame_counter := time_now()
 	running := true
 	for running {
 		// Measure frame time
-		now := sdl.GetPerformanceCounter()
-		game.input.dt = f32(now - last_counter) / f32(perf_freq)
-		last_counter = now
+		now := time_now()
+		game.input.dt = elapsed(last_frame_counter)
+		last_frame_counter = now
 
 		game.debug_timing.dt = game.input.dt
 		game.debug_timing.frame_ms = game.input.dt * 1000.0
@@ -406,7 +294,7 @@ main :: proc() {
 		}
 
 		// Draw ground plane
-		sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
+		sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.Mesh))
 
 		uniforms := Mesh_Uniforms {
 			view_proj = view_proj,
@@ -414,19 +302,21 @@ main :: proc() {
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &uniforms, size_of(Mesh_Uniforms))
 
+		// todo - bind_fragment_texture
 		tex_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
 			{texture = ground_texture.sdl_texture, sampler = renderer.nearest_repeat_sampler},
 		}
 		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&tex_sampler_bindings), len(tex_sampler_bindings))
+		// todo - end of bind_fragment_texture
 
-		vbuf_bindings := [?]sdl.GPUBufferBinding{{buffer = vertex_buffer, offset = 0}}
+		vbuf_bindings := [?]sdl.GPUBufferBinding{{buffer = ground_mesh_vertex_buffer, offset = 0}}
 		sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&vbuf_bindings), len(vbuf_bindings))
 		sdl.DrawGPUPrimitives(render_pass, 6, 1, 0, 0)
 
 		// Draw sprite
 		player := get_player()
 		player.position = {0, 0, 0}
-		sdl.BindGPUGraphicsPipeline(render_pass, sprite_pipeline)
+		sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.Sprite))
 
 		sprite_uniforms := Sprite_Uniforms {
 			view_proj    = view_proj,
@@ -439,10 +329,12 @@ main :: proc() {
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &sprite_uniforms, size_of(Sprite_Uniforms))
 
+		// todo - bind_fragment_texture
 		sprite_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
 			{texture = sprite_texture.sdl_texture, sampler = renderer.nearest_clamp_sampler},
 		}
 		sdl.BindGPUFragmentSamplers(render_pass, 0, raw_data(&sprite_sampler_bindings), len(sprite_sampler_bindings))
+		// todo - end of bind_fragment_texture
 
 		sdl.DrawGPUPrimitives(render_pass, 4, 1, 0, 0)
 
@@ -467,7 +359,7 @@ main :: proc() {
 		}
 
 		// Wipe scratch — everything allocated this frame is gone
-		free_all(scratch_allocator)
+		free_all(context.temp_allocator)
 	}
 }
 
@@ -487,6 +379,18 @@ gather_input :: proc(input: ^Game_Input) {
 	update_button(&input.move_right, keyboard[sdl.Scancode.D])
 	update_button(&input.action_a, keyboard[sdl.Scancode.SPACE])
 	update_button(&input.action_b, keyboard[sdl.Scancode.E]) // TODO: conflicts with debug camera fly-up (E/Q) — resolve when game actions are wired
+}
+
+time_now :: proc() -> u64 {
+	return u64(sdl.GetPerformanceCounter())
+}
+
+elapsed_ms :: proc(start: u64) -> f32 {
+	return elapsed(start) * 1000.0
+}
+
+elapsed :: proc(start: u64) -> f32 {
+	return f32(sdl.GetPerformanceCounter() - start) / f32(sdl.GetPerformanceFrequency())
 }
 
 format_bytes :: proc(bytes: uint) -> string {
