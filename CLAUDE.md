@@ -9,7 +9,7 @@ Claude is a **guide and pair programmer**, not an autonomous builder.
 - When asked to implement something, produce the relevant chunk and explain it
 - Ask clarifying questions before writing non-trivial code
 - Call out scope creep. Keep the human honest.
-
+- Do not use Claude Code's plan mode tool. Planning happens in conversation, then goes into `todo.md` and `progress_tracker.md`.
 ---
 
 ## What Is This?

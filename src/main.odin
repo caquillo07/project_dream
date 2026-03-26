@@ -18,17 +18,16 @@ Button_State :: struct {
 	released: bool, // went up this frame
 }
 
-Debug_Timing :: struct {
-	dt:       f32, // seconds
-	fps:      f32,
-	frame_ms: f32,
-}
-
 renderer: Render_State
+game: Game_State
+game_input: Game_Input
 
 main :: proc() {
 	// Game memory — growable virtual memory arenas
 	// Initial block sizes are our best guess. If they grow, we log it so we can tune.
+	// todo - we need a permanet for the game memory and one for the platform,
+	//  do this when we get to hot reloading
+	main_started_at := time_now()
 	permanent_arena: vmem.Arena
 	if vmem.arena_init_growing(&permanent_arena, 64 * mem.Megabyte) != nil {
 		panic("Failed to init permanent arena")
@@ -81,11 +80,7 @@ main :: proc() {
 		}
 	}
 
-	ground_texture := load_texture_from_pixels(
-		CHECKER_SIZE,
-		CHECKER_SIZE,
-		checker_pixels[:],
-	)
+	ground_texture := load_texture_from_pixels(CHECKER_SIZE, CHECKER_SIZE, checker_pixels[:])
 	defer unload_texture(ground_texture)
 
 	// Ground quad — 6 vertices on XZ plane at Y=0
@@ -109,7 +104,7 @@ main :: proc() {
 	defer unload_texture(sprite_texture)
 
 	// Camera
-	cam := Camera {
+	game.camera = Camera {
 		target   = {0, 0, 0},
 		distance = CameraDistDefault,
 		pitch    = CameraPitch,
@@ -123,21 +118,23 @@ main :: proc() {
 	title_ms_min: f32 = 999.0
 	title_ms_max: f32
 
+	log.infof("platform init took %.2fms", elapsed_ms(main_started_at))
+
 	// Main loop and Frame timing
 	last_frame_counter := time_now()
 	running := true
+	dt: f32
 	for running {
 		// Measure frame time
 		now := time_now()
-		game.input.dt = elapsed(last_frame_counter)
+		dt = elapsed(last_frame_counter)
 		last_frame_counter = now
 
-		game.debug_timing.dt = game.input.dt
-		game.debug_timing.frame_ms = game.input.dt * 1000.0
-		game.debug_timing.fps = game.input.dt > 0 ? 1.0 / game.input.dt : 0
+		game.debug_timing.frame_ms = dt * 1000.0
+		game.debug_timing.fps = dt > 0 ? 1.0 / dt : 0
 
 		// Accumulate timing samples, update title periodically
-		title_accumulator += game.debug_timing.dt
+		title_accumulator += dt
 		title_frame_count += 1
 		title_ms_sum += game.debug_timing.frame_ms
 		title_ms_min = min(title_ms_min, game.debug_timing.frame_ms)
@@ -162,6 +159,7 @@ main :: proc() {
 			title_ms_max = 0
 		}
 
+		reset_game_input(&game_input)
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
@@ -174,13 +172,13 @@ main :: proc() {
 				case .F1:
 					if !game.debug_mode {
 						// Enter debug mode — save follow camera, init debug camera at current eye position
-						game.saved_cam = cam
-						offset_y := cam.distance * math.sin(cam.pitch)
-						offset_z := cam.distance * math.cos(cam.pitch)
+						game.saved_cam = game.camera
+						offset_y := game.camera.distance * math.sin(game.camera.pitch)
+						offset_z := game.camera.distance * math.cos(game.camera.pitch)
 						game.debug_cam = Debug_Camera {
-							position = cam.target + {0, offset_y, offset_z},
+							position = game.camera.target + {0, offset_y, offset_z},
 							yaw      = 0,
-							pitch    = -cam.pitch, // looking down at target
+							pitch    = -game.camera.pitch, // looking down at target
 							speed    = DebugCamSpeedDefault,
 						}
 						game.debug_mode = true
@@ -191,7 +189,7 @@ main :: proc() {
 						log.infof("Debug camera ON")
 					} else {
 						// Exit debug mode — restore follow camera
-						cam = game.saved_cam
+						game.camera = game.saved_cam
 						game.debug_mode = false
 						assert(
 							sdl.SetWindowRelativeMouseMode(renderer.window, false),
@@ -207,28 +205,46 @@ main :: proc() {
 					}
 				}
 			case .MOUSE_WHEEL:
+				scroll := event.wheel.y
+				// if using natural scrolling, convert back to regular
+				//  todo - not sure if i want this, maybe it can be a setting if
+				//   someone else wants/needs it
+				// if event.wheel.direction == .FLIPPED do scroll = -scroll
+				game_input.scroll_delta += scroll
+
+				// todo move to game layer
 				if game.debug_mode {
 					// Scroll adjusts debug camera game.speed
 					game.debug_cam.speed = clamp(
-						game.debug_cam.speed + event.wheel.y * 2.0,
+						game.debug_cam.speed + game_input.scroll_delta * 2.0,
 						DebugCamSpeedMin,
 						DebugCamSpeedMax,
 					)
 				} else {
 					// Scroll zooms follow camera
-					cam.distance -= event.wheel.y * CameraZoomSpeed
-					cam.distance = clamp(cam.distance, CameraDistMin, CameraDistMax)
+					game.camera.distance -= game_input.scroll_delta * CameraZoomSpeed
+					game.camera.distance = clamp(game.camera.distance, CameraDistMin, CameraDistMax)
 				}
 			case .MOUSE_MOTION:
+				game_input.mouse_delta.x += event.motion.xrel
+				game_input.mouse_delta.y += event.motion.yrel
+				game_input.mouse_position = {event.motion.x, event.motion.y}
+
+				// todo move to game layer
 				if game.debug_mode {
-					game.debug_cam.yaw += event.motion.xrel * MouseSensitivity
-					game.debug_cam.pitch -= event.motion.yrel * MouseSensitivity
+					game.debug_cam.yaw += game_input.mouse_delta.x * MouseSensitivity
+					game.debug_cam.pitch -= game_input.mouse_delta.y * MouseSensitivity
 					game.debug_cam.pitch = clamp(
 						game.debug_cam.pitch,
 						-85.0 * math.RAD_PER_DEG,
 						85.0 * math.RAD_PER_DEG,
 					)
 				}
+			case .MOUSE_BUTTON_DOWN, .MOUSE_BUTTON_UP:
+				is_down := event.type == .MOUSE_BUTTON_DOWN
+				if event.button.button == sdl.BUTTON_LEFT do update_button(&game_input.mouse_left, is_down)
+				if event.button.button == sdl.BUTTON_RIGHT do update_button(&game_input.mouse_right, is_down)
+
 			case .WINDOW_PIXEL_SIZE_CHANGED:
 				log.info("WINDOW_PIXEL_SIZE_CHANGED event fired")
 				new_w := u32(event.window.data1)
@@ -240,7 +256,7 @@ main :: proc() {
 		}
 
 		// Gather input from keyboard state
-		gather_input(&game.input)
+		gather_input(&game_input)
 
 		// Camera update
 		view_proj: linalg.Matrix4f32
@@ -254,12 +270,12 @@ main :: proc() {
 				-math.cos(game.debug_cam.yaw) * math.cos(game.debug_cam.pitch),
 			}
 			right := Vec3{math.cos(game.debug_cam.yaw), 0, math.sin(game.debug_cam.yaw)}
-			move_speed := game.debug_cam.speed * game.input.dt
+			move_speed := game.debug_cam.speed * dt
 
-			if game.input.move_up.is_down do game.debug_cam.position += forward * move_speed
-			if game.input.move_down.is_down do game.debug_cam.position -= forward * move_speed
-			if game.input.move_right.is_down do game.debug_cam.position += right * move_speed
-			if game.input.move_left.is_down do game.debug_cam.position -= right * move_speed
+			if game_input.move_up.is_down do game.debug_cam.position += forward * move_speed
+			if game_input.move_down.is_down do game.debug_cam.position -= forward * move_speed
+			if game_input.move_right.is_down do game.debug_cam.position += right * move_speed
+			if game_input.move_left.is_down do game.debug_cam.position -= right * move_speed
 
 			// todo(hector) - move these to the input layer?
 			keyboard := sdl.GetKeyboardState(nil)
@@ -272,18 +288,18 @@ main :: proc() {
 			cam_up = linalg.cross(right, forward)
 		} else {
 			// Follow camera — WASD pans target (temporary until player exists)
-			if game.input.move_up.is_down do cam.target.z -= CameraPanSpeed * game.input.dt
-			if game.input.move_down.is_down do cam.target.z += CameraPanSpeed * game.input.dt
-			if game.input.move_left.is_down do cam.target.x -= CameraPanSpeed * game.input.dt
-			if game.input.move_right.is_down do cam.target.x += CameraPanSpeed * game.input.dt
+			if game_input.move_up.is_down do game.camera.target.z -= CameraPanSpeed * dt
+			if game_input.move_down.is_down do game.camera.target.z += CameraPanSpeed * dt
+			if game_input.move_left.is_down do game.camera.target.x -= CameraPanSpeed * dt
+			if game_input.move_right.is_down do game.camera.target.x += CameraPanSpeed * dt
 
-			offset_y := cam.distance * math.sin(cam.pitch)
-			offset_z := cam.distance * math.cos(cam.pitch)
-			eye := cam.target + {0, offset_y, offset_z}
-			view := linalg.matrix4_look_at_f32(eye, cam.target, {0, 1, 0})
+			offset_y := game.camera.distance * math.sin(game.camera.pitch)
+			offset_z := game.camera.distance * math.cos(game.camera.pitch)
+			eye := game.camera.target + {0, offset_y, offset_z}
+			view := linalg.matrix4_look_at_f32(eye, game.camera.target, {0, 1, 0})
 			view_proj = renderer.proj * view
 			cam_right = {1, 0, 0}
-			cam_forward := Vec3{0, -math.sin(cam.pitch), -math.cos(cam.pitch)}
+			cam_forward := Vec3{0, -math.sin(game.camera.pitch), -math.cos(game.camera.pitch)}
 			cam_up = linalg.cross(cam_right, cam_forward)
 		}
 
@@ -370,6 +386,11 @@ update_button :: proc(button: ^Button_State, is_down: bool) {
 	button.released = !is_down && was_down
 }
 
+reset_game_input :: proc(input: ^Game_Input) {
+	input.scroll_delta = 0
+	input.mouse_delta = {}
+}
+
 gather_input :: proc(input: ^Game_Input) {
 	keyboard := sdl.GetKeyboardState(nil)
 
@@ -422,3 +443,4 @@ log_sdl_fatal :: proc(msg: string, location := #caller_location) -> ! {
 	}
 	panic("fatal error encountered", loc = location)
 }
+

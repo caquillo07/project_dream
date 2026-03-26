@@ -67,9 +67,20 @@ the project's architecture.
 - [x] Polymorphic renderer_upload_vertex_buffer ([]$T — no rawptr, no manual size)
 - [x] load_texture overload set, dropped redundant size params from load_texture_from_pixels
 - [x] Cleaned up redundant u32 casts, stale comments, debug logs
-- [ ] Move follow camera into Game struct (debug_cam/saved_cam already there, but cam is a local)
-- [ ] Init player entity once at startup (currently stomped every frame in render loop)
-- [ ] Remove unused Entity_ID type or wire it up
+- [x] Move follow camera into Game struct (folded into Phase 4.75)
+- [x] Init player entity once at startup (folded into Phase 4.75)
+- [x] Entity_ID kept for future use (entities referencing each other)
+
+### Phase 4.75 — Game Layer Split (Casey Style)
+- [ ] Game_Input: remove from Game_State, add scroll_delta + mouse_delta
+- [ ] Game_State: add cam, is_initialized, view_proj/cam_right/cam_up output fields
+- [ ] game_update_and_render(state, input): camera update, debug cam, player init, view_proj
+- [ ] main.odin: allocate Game_State from permanent arena, input as local
+- [ ] main.odin: event loop accumulates scroll/mouse into input (F1/V stay in platform)
+- [ ] main.odin: THE ONE CALL — if !global_pause { game_update_and_render(game, &input) }
+- [ ] main.odin: draw section reads game state (view_proj, cam vectors, entity positions)
+- [ ] global_pause toggle
+- [ ] Verify: game.odin has zero SDL imports, app runs correctly
 
 ### Phase 5 — Player Movement + Animation
 - [ ] Player entity with world position
@@ -79,12 +90,11 @@ the project's architecture.
 - [ ] Direction-aware animation (different frames per direction)
 - [ ] Camera follows player position
 
-### Phase 6 — Game/Platform Layer Split
-- [ ] Platform struct (input, dt, memory arenas)
-- [ ] game_update_and_render() — the one call
-- [ ] GameState allocated from permanent arena
-- [ ] Scratch arena reset every frame
-- [ ] Clean separation verified: game code has zero SDL imports
+### Phase 5.5 — Hot Reload + Rewind
+- [ ] Game layer as shared library (separate compilation unit)
+- [ ] Platform struct (input, dt, memory arenas, platform services)
+- [ ] Hot reload: recompile game DLL, reload function pointers, memory persists
+- [ ] Rewind: snapshot/restore Game_State for step-back debugging
 
 ---
 
@@ -97,10 +107,11 @@ the project's architecture.
 - Phase 4 — Sprite Pipeline + Billboard
 
 **In Progress:**
-- Phase 4.5 — Code Cleanup & Architecture (3 items remaining)
+- Phase 4.75 — Game Layer Split (Casey Style)
 
 **Up Next:**
 - Phase 5 — Player Movement + Animation
+- Phase 5.5 — Hot Reload + Rewind
 
 **Blocked:**
 - (none)
