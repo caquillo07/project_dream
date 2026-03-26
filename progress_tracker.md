@@ -4,6 +4,29 @@ Newest entries first.
 
 ---
 
+## 2026-03-22 — Phase 4.5: Code Cleanup & Architecture
+
+**What:** Major refactor to organize codebase for Phase 5+ development.
+
+**Renderer extraction:**
+- Render_State struct (device, window, pipelines, depth, samplers, projection)
+- Pipeline_Kind enum + table — pipelines stored in renderer.pipelines[.Mesh/.Sprite]
+- init_renderer / deinit_renderer, begin_frame / end_frame
+- resize_viewport (depth buffer + projection), vsync toggle
+- load_shader, load_texture (overload set), unload_texture
+- renderer_upload_vertex_buffer with polymorphic `[]$T` (no rawptr, no manual size)
+- Switched from stb_image (C, malloc) to core:image/png (native Odin, arena-friendly)
+
+**Game state:**
+- Game struct (entities, input, debug state) as package-level global
+- Entity fat struct (kind, position, direction, speed), flat array [1024]
+- Index 0 = null entity, index 1 = player (Handmade Hero style)
+- File split: renderer.odin, game.odin, entity.odin, camera.odin, sprite.odin, model.odin, math.odin
+
+**Key files:** src/renderer.odin, src/game.odin, src/entity.odin
+
+---
+
 ## 2026-03-16 — Cross-Platform Shader Pipeline (ShaderCross)
 
 **What:** Replaced macOS-only offline shader compilation with runtime SPIR-V transpilation via SDL_ShaderCross.

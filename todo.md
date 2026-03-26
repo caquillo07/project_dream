@@ -62,8 +62,11 @@ the project's architecture.
 - [x] Entity struct (kind, position, direction, speed), flat array, null at 0, player at 1
 - [x] File split: renderer.odin, game.odin, entity.odin, camera.odin, sprite.odin, model.odin, math.odin
 - [x] Sprite.rect fixed to Vec4
-- [ ] Store pipelines in renderer.pipelines[.Mesh] / [.Sprite] (still local vars in main)
-- [ ] Release pipelines in deinit_renderer
+- [x] Pipelines stored in renderer.pipelines table, released in deinit_renderer
+- [x] Switched from stb_image to core:image/png (native Odin, arena-friendly)
+- [x] Polymorphic renderer_upload_vertex_buffer ([]$T — no rawptr, no manual size)
+- [x] load_texture overload set, dropped redundant size params from load_texture_from_pixels
+- [x] Cleaned up redundant u32 casts, stale comments, debug logs
 - [ ] Move follow camera into Game struct (debug_cam/saved_cam already there, but cam is a local)
 - [ ] Init player entity once at startup (currently stomped every frame in render loop)
 - [ ] Remove unused Entity_ID type or wire it up
@@ -94,7 +97,7 @@ the project's architecture.
 - Phase 4 — Sprite Pipeline + Billboard
 
 **In Progress:**
-- Phase 4.5 — Code Cleanup & Architecture (5 items remaining)
+- Phase 4.5 — Code Cleanup & Architecture (3 items remaining)
 
 **Up Next:**
 - Phase 5 — Player Movement + Animation
@@ -116,6 +119,10 @@ the project's architecture.
 - Billboard sprites need camera right/up vectors — compute alongside view_proj each frame
 - Sprite pipeline: no vertex buffer, quad from gl_VertexIndex, triangle strip (4 verts)
 - stb_image: `stbi.load` returns `[^]byte`, free with `stbi.image_free`, force RGBA with channel=4
+- Replaced stb_image with core:image/png — native Odin, supports arena allocators, no C malloc
+- Odin parametric polymorphism (`[]$T`) eliminates rawptr + manual size_of for GPU uploads
+- `load_texture` overload set (proc{from_file, from_pixels}) — idiomatic Odin for function overloading
+- For `[]byte` slices, `len()` IS byte count (size_of(byte)==1) — but for typed slices use `len * size_of(T)`
 
 ---
 
