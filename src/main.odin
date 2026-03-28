@@ -3,7 +3,6 @@ package main
 import "base:intrinsics"
 import "core:fmt"
 import "core:log"
-import "core:math"
 import "core:mem"
 import vmem "core:mem/virtual"
 import sdl "vendor:sdl3"
@@ -15,6 +14,12 @@ Button_State :: struct {
 	is_down:  bool, // held down right now
 	pressed:  bool, // went down this frame
 	released: bool, // went up this frame
+}
+
+Debug_Timing :: struct {
+	fps:                   f32,
+	frame_ms:              f32,
+	platform_init_elapsed: f32,
 }
 
 Platform :: struct {
@@ -115,14 +120,15 @@ main :: proc() {
 	title_ms_min: f32 = 999.0
 	title_ms_max: f32
 
-	log.infof("platform init took %.2fms", elapsed_ms(main_started_at))
+	platform.debug_timing.platform_init_elapsed = elapsed_ms(main_started_at)
+	log.infof("platform init took %.2fms", platform.debug_timing.platform_init_elapsed)
 
 	// Main loop and Frame timing
 	game_init(&platform.game)
 	last_frame_counter := time_now()
-	running, global_pause := true, false
+	game_running, global_pause := true, false
 	dt: f32
-	for running {
+	for game_running {
 		// Measure frame time
 		now := time_now()
 		dt = elapsed(last_frame_counter)
@@ -162,82 +168,27 @@ main :: proc() {
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
 			case .QUIT:
-				running = false
+				game_running = false
 			case .KEY_DOWN:
 				#partial switch event.key.scancode {
-				case .ESCAPE:
-					running = false
-				case .F1:
-					if !platform.game.debug_mode {
-						// Enter debug mode — save follow camera, init debug camera at current eye position
-						platform.game.saved_cam = platform.game.camera
-						offset_y := platform.game.camera.distance * math.sin(platform.game.camera.pitch)
-						offset_z := platform.game.camera.distance * math.cos(platform.game.camera.pitch)
-						platform.game.debug_cam = Debug_Camera {
-							position = platform.game.camera.target + {0, offset_y, offset_z},
-							yaw      = 0,
-							pitch    = -platform.game.camera.pitch, // looking down at target
-							speed    = DebugCamSpeedDefault,
-						}
-						platform.game.debug_mode = true
-						assert(
-							sdl.SetWindowRelativeMouseMode(platform.renderer.window, true),
-							"failed to set relative mouse mode",
-						)
-						log.infof("Debug camera ON")
-					} else {
-						// Exit debug mode — restore follow camera
-						platform.game.camera = platform.game.saved_cam
-						platform.game.debug_mode = false
-						assert(
-							sdl.SetWindowRelativeMouseMode(platform.renderer.window, false),
-							"failed to set relative mouse mode",
-						)
-						log.infof("Debug camera OFF")
-					}
-				case .V:
-					if platform.game.debug_mode {
-						platform.renderer.vsync = !platform.renderer.vsync // todo - should live on platform?
-						renderer_enable_vsync(platform.renderer.vsync)
-						log.infof("VSync: %s", platform.renderer.vsync ? "ON" : "OFF")
-					}
+				case .P:
+					global_pause = !global_pause
+					action := "enabled" if global_pause else "disabled"
+					log.infof("Global pause is %s", action)
 				}
 			case .MOUSE_WHEEL:
-				scroll := event.wheel.y
 				// if using natural scrolling, convert back to regular
 				//  todo - not sure if i want this, maybe it can be a setting if
 				//   someone else wants/needs it
-				// if event.wheel.direction == .FLIPPED do scroll = -scroll
-				platform.game_input.scroll_delta += scroll
+				scroll := event.wheel.y
+				if event.wheel.direction == .FLIPPED do scroll = -scroll
+				platform.game_input.mouse_scroll_delta += scroll
 
-				// todo move to game layer
-				if platform.game.debug_mode {
-					// Scroll adjusts debug camera game.speed
-					platform.game.debug_cam.speed = clamp(
-						platform.game.debug_cam.speed + platform.game_input.scroll_delta * 2.0,
-						DebugCamSpeedMin,
-						DebugCamSpeedMax,
-					)
-				} else {
-					// Scroll zooms follow camera
-					platform.game.camera.distance -= platform.game_input.scroll_delta * CameraZoomSpeed
-					platform.game.camera.distance = clamp(platform.game.camera.distance, CameraDistMin, CameraDistMax)
-				}
 			case .MOUSE_MOTION:
-				platform.game_input.mouse_delta.x += event.motion.xrel
-				platform.game_input.mouse_delta.y += event.motion.yrel
+				platform.game_input.mouse_position_delta.x += event.motion.xrel
+				platform.game_input.mouse_position_delta.y += event.motion.yrel
 				platform.game_input.mouse_position = {event.motion.x, event.motion.y}
 
-				// todo move to game layer
-				if platform.game.debug_mode {
-					platform.game.debug_cam.yaw += platform.game_input.mouse_delta.x * MouseSensitivity
-					platform.game.debug_cam.pitch -= platform.game_input.mouse_delta.y * MouseSensitivity
-					platform.game.debug_cam.pitch = clamp(
-						platform.game.debug_cam.pitch,
-						-85.0 * math.RAD_PER_DEG,
-						85.0 * math.RAD_PER_DEG,
-					)
-				}
 			case .MOUSE_BUTTON_DOWN, .MOUSE_BUTTON_UP:
 				is_down := event.type == .MOUSE_BUTTON_DOWN
 				if event.button.button == sdl.BUTTON_LEFT do update_button(&platform.game_input.mouse_left, is_down)
@@ -257,10 +208,33 @@ main :: proc() {
 		gather_input(&platform.game_input)
 
 		// Game update
+		previous_debug_mode := platform.game.debug_mode
+		previous_vsync_mode := platform.game.vsync
 		if !global_pause {
-			game_update_and_render(&platform.game, &platform.game_input, dt, platform.renderer.proj)
+			game_update_and_render(
+				&platform.game,
+				&platform.game_input,
+				dt,
+				platform.renderer.pixel_width,
+				platform.renderer.pixel_height,
+			)
 		}
 
+		if platform.game.debug_mode != previous_debug_mode {
+			assert(
+				sdl.SetWindowRelativeMouseMode(platform.renderer.window, platform.game.debug_mode),
+				"failed to set relative mouse mode",
+			)
+			log.infof("Debug camera %s", platform.game.debug_mode ? "ON" : "OFF")
+		}
+
+		if platform.game.vsync != previous_vsync_mode {
+			renderer_enable_vsync(platform.game.vsync)
+			log.infof("VSync: %s", platform.game.vsync ? "ON" : "OFF")
+		}
+		if platform.game.quit_game {
+			game_running = false
+		}
 
 		cmd, render_pass, ok := renderer_begin_frame()
 		if !ok {
@@ -345,23 +319,29 @@ update_button :: proc(button: ^Button_State, is_down: bool) {
 }
 
 reset_game_input :: proc(input: ^Game_Input) {
-	input.scroll_delta = 0
-	input.mouse_delta = {}
+	input.mouse_scroll_delta = 0
+	input.mouse_position_delta = {}
 }
 
 gather_input :: proc(input: ^Game_Input) {
 	keyboard := sdl.GetKeyboardState(nil)
 
+	// game play
 	update_button(&input.move_up, keyboard[sdl.Scancode.W])
 	update_button(&input.move_down, keyboard[sdl.Scancode.S])
 	update_button(&input.move_left, keyboard[sdl.Scancode.A])
 	update_button(&input.move_right, keyboard[sdl.Scancode.D])
 	update_button(&input.action_a, keyboard[sdl.Scancode.SPACE])
 	update_button(&input.action_b, keyboard[sdl.Scancode.E])
-	// TODO: conflicts with game action B (E/Q) — resolve when game
-	//  actions are wired
+
+	// debug mode
+	update_button(&input.enable_debug_toggle, keyboard[sdl.Scancode.F1])
 	update_button(&input.cam_fly_down, keyboard[sdl.Scancode.Q])
 	update_button(&input.cam_fly_up, keyboard[sdl.Scancode.E])
+
+	// generic actions
+	update_button(&input.cancel, keyboard[sdl.Scancode.ESCAPE])
+	update_button(&input.debug_toggle_vsync, keyboard[sdl.Scancode.V])
 }
 
 time_now :: proc() -> u64 {

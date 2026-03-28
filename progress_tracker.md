@@ -4,6 +4,33 @@ Newest entries first.
 
 ---
 
+## 2026-03-27 — Phase 4.75: Game Layer Split (Casey Style)
+
+**What:** Clean platform/game boundary — game layer has zero SDL imports, all game logic flows through `game_update_and_render()`.
+
+**Platform/game boundary:**
+- game_update_and_render(game, input, dt, window_w, window_h) — THE ONE CALL
+- Game_State output fields: view_proj, camera_right, camera_up (platform reads for drawing)
+- Game_State signal bools: vsync, quit_game (platform reacts after the call)
+- Game_Input: movement, actions, debug toggles, mouse/scroll deltas, mouse buttons
+- Platform watches state changes (prev_debug_mode pattern) and calls SDL accordingly
+- game.odin imports only core:log, core:math, core:math/linalg — zero SDL
+
+**Game owns projection:**
+- FOV, near/far planes are game constants (GameFOV, GameNearPlane, GameFarPlane)
+- Platform passes window_width/height, game computes proj internally
+- Renderer no longer stores or computes projection matrix
+
+**Input restructure:**
+- All keyboard input through gather_input (F1, V, Escape wired as Button_States)
+- Mouse scroll/delta accumulated per-frame, applied once in game layer (fixes compounding bug)
+- Natural scrolling handled (FLIPPED direction check)
+- global_pause toggle (P key, platform-level)
+
+**Key files:** src/game.odin, src/main.odin, src/renderer.odin
+
+---
+
 ## 2026-03-22 — Phase 4.5: Code Cleanup & Architecture
 
 **What:** Major refactor to organize codebase for Phase 5+ development.

@@ -17,10 +17,8 @@ Pipeline_Kind :: enum {
 }
 
 Render_State :: struct {
-	pixel_width:            int,
-	pixel_height:           int,
-	proj:                   linalg.Matrix4f32,
-	vsync:                  bool,
+	pixel_width:            u32,
+	pixel_height:           u32,
 	device:                 ^sdl.GPUDevice,
 	window:                 ^sdl.Window,
 	pipelines:              [Pipeline_Kind]^sdl.GPUGraphicsPipeline,
@@ -66,14 +64,17 @@ init_renderer :: proc() {
 	assert(sdl.GetWindowSizeInPixels(platform.renderer.window, &pixel_w, &pixel_h))
 	log.infof("Window: %dx%d logical, %dx%d pixels", WINDOW_WIDTH, WINDOW_HEIGHT, pixel_w, pixel_h)
 
-	platform.renderer.pixel_height = int(pixel_h)
-	platform.renderer.pixel_width = int(pixel_w)
+	platform.renderer.pixel_height = u32(pixel_h)
+	platform.renderer.pixel_width = u32(pixel_w)
 
 	// VSync on by default
-	platform.renderer.vsync = true
+	// todo when we are saving settings, make sure to make this load that state
 	assert(sdl.SetGPUSwapchainParameters(platform.renderer.device, platform.renderer.window, .SDR, .VSYNC))
 
-	platform.renderer.swapchain_format = sdl.GetGPUSwapchainTextureFormat(platform.renderer.device, platform.renderer.window)
+	platform.renderer.swapchain_format = sdl.GetGPUSwapchainTextureFormat(
+		platform.renderer.device,
+		platform.renderer.window,
+	)
 	log.infof("using swapchain format: %v", platform.renderer.swapchain_format)
 
 	// Depth buffer
@@ -118,14 +119,6 @@ init_renderer :: proc() {
 	if platform.renderer.nearest_clamp_sampler == nil {
 		log_sdl_fatal("Failed to create sprite sampler")
 	}
-
-	// projection matrix
-	platform.renderer.proj = linalg.matrix4_perspective_f32(
-		math.to_radians(f32(45.0)),
-		f32(platform.renderer.pixel_width) / f32(platform.renderer.pixel_height),
-		0.1,
-		100.0,
-	)
 
 	// Pipelines
 
@@ -186,14 +179,20 @@ renderer_resize_viewport :: proc(width, height: u32) {
 			usage = {.DEPTH_STENCIL_TARGET},
 		},
 	)
+	platform.renderer.pixel_height = height
+	platform.renderer.pixel_width = width
 	if platform.renderer.depth_texture == nil {
 		log_sdl_fatal("Failed to recreate depth texture on resize")
 	}
-	platform.renderer.proj = linalg.matrix4_perspective_f32(math.to_radians(f32(45.0)), f32(width) / f32(height), 0.1, 100.0)
 }
 
 renderer_enable_vsync :: proc(enable: bool) {
-	if !sdl.SetGPUSwapchainParameters(platform.renderer.device, platform.renderer.window, .SDR, enable ? .VSYNC : .IMMEDIATE) {
+	if !sdl.SetGPUSwapchainParameters(
+		platform.renderer.device,
+		platform.renderer.window,
+		.SDR,
+		enable ? .VSYNC : .IMMEDIATE,
+	) {
 		state := enable ? "enable" : "disable"
 		log_sdl_warn(fmt.tprintf("failed to %s vsync", state))
 	}
@@ -355,7 +354,10 @@ renderer_pipeline :: proc(kind: Pipeline_Kind) -> ^sdl.GPUGraphicsPipeline {
 
 renderer_upload_vertex_buffer :: proc(data: []$T) -> ^sdl.GPUBuffer {
 	data_size := u32(len(data) * size_of(T))
-	vertex_buffer := sdl.CreateGPUBuffer(platform.renderer.device, sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = data_size})
+	vertex_buffer := sdl.CreateGPUBuffer(
+		platform.renderer.device,
+		sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = data_size},
+	)
 	if vertex_buffer == nil {
 		log_sdl_fatal("Failed to create vertex buffer")
 	}

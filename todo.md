@@ -72,15 +72,17 @@ the project's architecture.
 - [x] Entity_ID kept for future use (entities referencing each other)
 
 ### Phase 4.75 — Game Layer Split (Casey Style)
-- [ ] Game_Input: remove from Game_State, add scroll_delta + mouse_delta
-- [ ] Game_State: add cam, is_initialized, view_proj/cam_right/cam_up output fields
-- [ ] game_update_and_render(state, input): camera update, debug cam, player init, view_proj
-- [ ] main.odin: allocate Game_State from permanent arena, input as local
-- [ ] main.odin: event loop accumulates scroll/mouse into input (F1/V stay in platform)
-- [ ] main.odin: THE ONE CALL — if !global_pause { game_update_and_render(game, &input) }
-- [ ] main.odin: draw section reads game state (view_proj, cam vectors, entity positions)
-- [ ] global_pause toggle
-- [ ] Verify: game.odin has zero SDL imports, app runs correctly
+- [x] Game_Input: separated from Game_State, scroll/mouse delta, mouse buttons, debug toggle buttons
+- [x] Game_State: view_proj/camera_right/camera_up output fields, vsync/quit_game signals
+- [x] game_update_and_render(game, input, dt, window_w, window_h): all game logic, zero SDL
+- [x] Game owns projection (FOV, near, far, aspect) — platform passes window dimensions
+- [x] Event loop: platform accumulates scroll/mouse into Game_Input, no game logic
+- [x] Debug toggle: game handles F1 via Button_State, platform reacts to state change (SDL mouse mode)
+- [x] VSync/quit: game sets bools, platform reacts (Handmade Hero state-signal pattern)
+- [x] THE ONE CALL: if !global_pause { game_update_and_render(...) }
+- [x] Draw section reads game state (view_proj, cam vectors, entity positions)
+- [x] global_pause toggle (P key)
+- [x] Verified: game.odin has zero SDL imports, clean platform/game boundary
 
 ### Phase 5 — Player Movement + Animation
 - [ ] Player entity with world position
@@ -105,13 +107,18 @@ the project's architecture.
 - Phase 2 — Mesh Pipeline + Ground Plane
 - Phase 3 — 3D Camera
 - Phase 4 — Sprite Pipeline + Billboard
+- Phase 4.5 — Code Cleanup & Architecture
+- Phase 4.75 — Game Layer Split (Casey Style)
 
 **In Progress:**
-- Phase 4.75 — Game Layer Split (Casey Style)
+- (none)
 
 **Up Next:**
 - Phase 5 — Player Movement + Animation
 - Phase 5.5 — Hot Reload + Rewind
+
+**Backlog:**
+- Custom logger system (see src/logger.odin for format ideas)
 
 **Blocked:**
 - (none)
@@ -134,6 +141,10 @@ the project's architecture.
 - Odin parametric polymorphism (`[]$T`) eliminates rawptr + manual size_of for GPU uploads
 - `load_texture` overload set (proc{from_file, from_pixels}) — idiomatic Odin for function overloading
 - For `[]byte` slices, `len()` IS byte count (size_of(byte)==1) — but for typed slices use `len * size_of(T)`
+- Game->platform communication via bools in Game_State (quit_game, vsync) — rewind-safe, hot-reload-safe, no function pointers needed
+- Accumulate mouse/scroll deltas across events, apply once per frame in game layer — avoids compounding bug
+- Game owns projection (FOV, near/far) — platform just passes window dimensions
+- Watch for sneaky `platform.*` globals leaking into game layer procs that take `game: ^Game_State`
 
 ---
 
