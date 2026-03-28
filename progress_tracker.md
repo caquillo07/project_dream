@@ -4,6 +4,23 @@ Newest entries first.
 
 ---
 
+## 2026-03-27 — Phase 5 (in progress): Player Movement
+
+**What:** Player entity moves in the 3D world with camera following.
+
+- WASD moves player entity on XZ plane (not camera target)
+- Diagonal movement normalized (no 1.41x speed boost)
+- 4-direction detection from movement vector (dominant axis picks sprite facing)
+- Direction persists when stopped (player faces last movement direction)
+- Camera follows player position (camera.target = player.position)
+- Scroll zoom still works independently
+
+**Up next:** Animation system — SpriteAnimation on entity, frame table for nate.png walk/idle, wire sprite_rect to draw call.
+
+**Key files:** src/game.odin, src/entity.odin, src/sprite.odin
+
+---
+
 ## 2026-03-27 — Phase 4.75: Game Layer Split (Casey Style)
 
 **What:** Clean platform/game boundary — game layer has zero SDL imports, all game logic flows through `game_update_and_render()`.

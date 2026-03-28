@@ -12,6 +12,7 @@ GameFarPlane :: f32(100.0)
 MaxEntities :: 1024
 EntityIDNull :: 0
 EntityIDPlayer :: 1
+PlayerMoveSpeed :: f32(5.0)
 
 Game_State :: struct {
 	view_proj:    linalg.Matrix4f32,
@@ -147,14 +148,35 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 		game.camera.distance -= game_input.mouse_scroll_delta * CameraZoomSpeed
 		game.camera.distance = clamp(game.camera.distance, CameraDistMin, CameraDistMax)
 
-		// Follow camera — WASD pans target (temporary until player exists)
-		if game_input.move_up.is_down do game.camera.target.z -= CameraPanSpeed * dt
-		if game_input.move_down.is_down do game.camera.target.z += CameraPanSpeed * dt
-		if game_input.move_left.is_down do game.camera.target.x -= CameraPanSpeed * dt
-		if game_input.move_right.is_down do game.camera.target.x += CameraPanSpeed * dt
+		move_x: f32
+		move_z: f32
+		if game_input.move_up.is_down do move_z -= 1
+		if game_input.move_down.is_down do move_z += 1
+		if game_input.move_left.is_down do move_x -= 1
+		if game_input.move_right.is_down do move_x += 1
+
+		player := get_player(game)
+		is_moving := move_x != 0 || move_z != 0
+		if is_moving {
+			// Normalize so diagonals aren't faster
+			length := math.sqrt(move_x * move_x + move_z * move_z)
+			move_x /= length
+			move_z /= length
+
+			player.position.x += move_x * PlayerMoveSpeed * dt
+			player.position.z += move_z * PlayerMoveSpeed * dt
+
+			// Pick closest 4-direction for sprite facing
+			if abs(move_z) >= abs(move_x) {
+				player.direction = move_z < 0 ? .Up : .Down
+			} else {
+				player.direction = move_x < 0 ? .Left : .Right
+			}
+		}
 
 		offset_y := game.camera.distance * math.sin(game.camera.pitch)
 		offset_z := game.camera.distance * math.cos(game.camera.pitch)
+		game.camera.target = player.position
 		eye := game.camera.target + {0, offset_y, offset_z}
 		view := linalg.matrix4_look_at_f32(eye, game.camera.target, {0, 1, 0})
 		game.view_proj = proj * view

@@ -85,12 +85,14 @@ the project's architecture.
 - [x] Verified: game.odin has zero SDL imports, clean platform/game boundary
 
 ### Phase 5 — Player Movement + Animation
-- [ ] Player entity with world position
-- [ ] WASD movement (frame-rate independent)
-- [ ] Direction detection (up/down/left/right based on movement)
-- [ ] Sprite animation (frame cycling based on time)
-- [ ] Direction-aware animation (different frames per direction)
-- [ ] Camera follows player position
+- [x] WASD moves player entity on XZ plane (normalized diagonal movement)
+- [x] Camera follows player position (camera.target = player.position)
+- [x] Direction detection from movement vector (dominant axis, 4-direction for sprite facing)
+- [x] Player faces last movement direction when idle (direction only updates when moving)
+- [ ] Animation state on entity (timer, frame index, playing flag — SpriteAnimation already in sprite.odin)
+- [ ] Sprite frame table (idle/walk rects per direction from nate.png 33x33 grid)
+- [ ] Walk animation: cycle frames while moving, stop on idle frame when stopped
+- [ ] Wire sprite_rect from entity animation state to draw call (replace hardcoded rect)
 
 ### Phase 5.5 — Hot Reload + Rewind
 - [ ] Game layer as shared library (separate compilation unit)
@@ -111,7 +113,7 @@ the project's architecture.
 - Phase 4.75 — Game Layer Split (Casey Style)
 
 **In Progress:**
-- (none)
+- Phase 5 — Player Movement + Animation
 
 **Up Next:**
 - Phase 5 — Player Movement + Animation
