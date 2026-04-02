@@ -95,12 +95,12 @@ the project's architecture.
 - [x] Wire sprite_rect from entity animation state to draw call (direction + frame drives rect)
 
 ### Phase 5.5 — Debug Visualization (Frustum + Camera)
-- [ ] Debug line shader (position + color, no texture)
-- [ ] Debug line pipeline (LINES topology, no backface cull, depth on)
-- [ ] Compute follow camera frustum corners (inverse view_proj, 8 world-space points)
-- [ ] Draw frustum wireframe (12 lines: 4 near, 4 far, 4 connecting)
-- [ ] Draw camera eye position marker
-- [ ] Only draw when debug_mode is active (viewing saved follow camera)
+- [x] Debug line shader (position + color, no texture)
+- [x] Debug line pipeline (LINES topology, no backface cull, depth on)
+- [x] Compute follow camera frustum corners (inverse view_proj, 8 world-space points)
+- [x] Draw frustum wireframe (12 lines: 4 near, 4 far, 4 connecting)
+- [x] Draw camera eye position marker
+- [x] Only draw when debug_mode is active (viewing saved follow camera)
 
 ### Phase 6 — 3D Model Loading + Rendering
 - [ ] glTF parser (load .glb/.gltf — meshes, materials, node hierarchy)
@@ -136,9 +136,10 @@ the project's architecture.
 - Phase 4.5 — Code Cleanup & Architecture
 - Phase 4.75 — Game Layer Split (Casey Style)
 - Phase 5 — Player Movement + Animation
+- Phase 5.5 — Debug Visualization (Frustum + Camera)
 
 **In Progress:**
-- Phase 5.5 — Debug Visualization (Frustum + Camera)
+- Phase 6 — 3D Model Loading + Rendering
 
 **Up Next:**
 - Phase 6.5 — Model Animation (Skeletal)

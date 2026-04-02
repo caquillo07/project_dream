@@ -317,14 +317,73 @@ main :: proc() {
 
 		// debug stuff
 		if platform.game.debug_mode {
-			sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.DebugLines))
-
 			game_camera_frustum_uniforms := Debug_Line_Uniforms {
 				view_proj = platform.game.view_proj,
 			}
-			sdl.PushGPUVertexUniformData(cmd, 0, &game_camera_frustum_uniforms, size_of(Debug_Line_Uniforms))
 
 			debug_frustum_corners := platform.game.debug_frustum_corners
+
+			// Filled frustum faces (draw first so wireframe renders on top)
+			fill := ColorYellow
+			fill.a = 0.15
+			frustum_tris := [36]Debug_Line_Vertex {
+				// Near face
+				{position = debug_frustum_corners[0], color = fill},
+				{position = debug_frustum_corners[1], color = fill},
+				{position = debug_frustum_corners[2], color = fill},
+				{position = debug_frustum_corners[0], color = fill},
+				{position = debug_frustum_corners[2], color = fill},
+				{position = debug_frustum_corners[3], color = fill},
+				// Far face
+				{position = debug_frustum_corners[4], color = fill},
+				{position = debug_frustum_corners[6], color = fill},
+				{position = debug_frustum_corners[5], color = fill},
+				{position = debug_frustum_corners[4], color = fill},
+				{position = debug_frustum_corners[7], color = fill},
+				{position = debug_frustum_corners[6], color = fill},
+				// Left face
+				{position = debug_frustum_corners[0], color = fill},
+				{position = debug_frustum_corners[3], color = fill},
+				{position = debug_frustum_corners[7], color = fill},
+				{position = debug_frustum_corners[0], color = fill},
+				{position = debug_frustum_corners[7], color = fill},
+				{position = debug_frustum_corners[4], color = fill},
+				// Right face
+				{position = debug_frustum_corners[1], color = fill},
+				{position = debug_frustum_corners[5], color = fill},
+				{position = debug_frustum_corners[6], color = fill},
+				{position = debug_frustum_corners[1], color = fill},
+				{position = debug_frustum_corners[6], color = fill},
+				{position = debug_frustum_corners[2], color = fill},
+				// Top face
+				{position = debug_frustum_corners[3], color = fill},
+				{position = debug_frustum_corners[2], color = fill},
+				{position = debug_frustum_corners[6], color = fill},
+				{position = debug_frustum_corners[3], color = fill},
+				{position = debug_frustum_corners[6], color = fill},
+				{position = debug_frustum_corners[7], color = fill},
+				// Bottom face
+				{position = debug_frustum_corners[0], color = fill},
+				{position = debug_frustum_corners[4], color = fill},
+				{position = debug_frustum_corners[5], color = fill},
+				{position = debug_frustum_corners[0], color = fill},
+				{position = debug_frustum_corners[5], color = fill},
+				{position = debug_frustum_corners[1], color = fill},
+			}
+
+			sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.DebugTriangles))
+			sdl.PushGPUVertexUniformData(cmd, 0, &game_camera_frustum_uniforms, size_of(Debug_Line_Uniforms))
+			frustum_tris_buf := renderer_upload_vertex_buffer(frustum_tris[:])
+			defer renderer_release_vertex_buffer(frustum_tris_buf)
+
+			frustum_tris_vert_buf := [?]sdl.GPUBufferBinding{{buffer = frustum_tris_buf, offset = 0}}
+			sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&frustum_tris_vert_buf), len(frustum_tris_vert_buf))
+			sdl.DrawGPUPrimitives(render_pass, len(frustum_tris), 1, 0, 0)
+
+			// Frustum wireframe
+			sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.DebugLines))
+			sdl.PushGPUVertexUniformData(cmd, 0, &game_camera_frustum_uniforms, size_of(Debug_Line_Uniforms))
+
 			frustum_lines := [?]Debug_Line_Vertex {
 				// Near quad`
 				{position = debug_frustum_corners[0], color = ColorYellow},
@@ -356,8 +415,14 @@ main :: proc() {
 			}
 
 			frustum_buf := renderer_upload_vertex_buffer(frustum_lines[:])
+			defer renderer_release_vertex_buffer(frustum_buf)
 			frustum_buf_vert_bindings := [?]sdl.GPUBufferBinding{{buffer = frustum_buf, offset = 0}}
-			sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&frustum_buf_vert_bindings), len(frustum_buf_vert_bindings))
+			sdl.BindGPUVertexBuffers(
+				render_pass,
+				0,
+				raw_data(&frustum_buf_vert_bindings),
+				len(frustum_buf_vert_bindings),
+			)
 			sdl.DrawGPUPrimitives(render_pass, len(frustum_lines), 1, 0, 0)
 
 			// camera eye cross - upload and draw

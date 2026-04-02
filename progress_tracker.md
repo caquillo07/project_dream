@@ -4,6 +4,22 @@ Newest entries first.
 
 ---
 
+## 2026-03-27 — Phase 5.5 Complete: Debug Visualization
+
+**What:** Frustum wireframe and camera eye marker visible in debug mode (F1).
+
+- Debug line pipeline: LINELIST topology, position + color vertex format, no textures
+- Frustum corners computed via inverse(view_proj) unprojection from NDC to world space
+- 12-edge wireframe (4 near, 4 far, 4 connecting) drawn in yellow
+- Camera eye position drawn as cyan 3-axis cross
+- Only rendered when debug_mode is active
+- Stored saved follow camera view_proj + eye in Game_State for debug vis (no saved_cam copy needed)
+- Reference doc: docs/references/debug_frustum.md
+
+**Key files:** src/debug.odin, src/game.odin, src/main.odin, src/renderer.odin, shaders/debug_line.*.glsl
+
+---
+
 ## 2026-03-27 — Phase 5 Complete: Player Movement + Animation
 
 **What:** Player entity moves in the 3D world with animated sprite and camera following.

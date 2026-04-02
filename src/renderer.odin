@@ -15,6 +15,7 @@ Pipeline_Kind :: enum {
 	Mesh,
 	Sprite,
 	DebugLines,
+	DebugTriangles,
 }
 
 Render_State :: struct {
@@ -156,7 +157,7 @@ init_renderer :: proc() {
 	shader_count += 1
 
 	platform.renderer.pipelines[.DebugLines] = create_debug_line_pipeline(debug_line_vert_shader, debug_line_frag_shader)
-
+	platform.renderer.pipelines[.DebugTriangles] = create_debug_triangle_pipeline(debug_line_vert_shader, debug_line_frag_shader)
 
 	// Report shader compilation time
 	shader_elapsed := elapsed_ms(shader_start)
@@ -502,6 +503,58 @@ create_debug_line_pipeline :: proc(vert_shader, frag_shader: ^sdl.GPUShader) -> 
 	)
 	if pipeline == nil {
 		log_sdl_fatal("Failed to create debug line pipeline")
+	}
+	return pipeline
+}
+
+@(private = "file")
+create_debug_triangle_pipeline :: proc(vert_shader, frag_shader: ^sdl.GPUShader) -> ^sdl.GPUGraphicsPipeline {
+	vert_buf_descs := [?]sdl.GPUVertexBufferDescription {
+		{slot = 0, pitch = size_of(Debug_Line_Vertex), input_rate = .VERTEX},
+	}
+	vert_attrs := [?]sdl.GPUVertexAttribute {
+		{location = 0, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Debug_Line_Vertex, position))},
+		{location = 1, buffer_slot = 0, format = .FLOAT4, offset = u32(offset_of(Debug_Line_Vertex, color))},
+	}
+	color_target_descs := [?]sdl.GPUColorTargetDescription {
+		{
+			format = platform.renderer.swapchain_format,
+			blend_state = {
+				enable_blend = true,
+				src_color_blendfactor = .SRC_ALPHA,
+				dst_color_blendfactor = .ONE_MINUS_SRC_ALPHA,
+				color_blend_op = .ADD,
+				src_alpha_blendfactor = .ONE,
+				dst_alpha_blendfactor = .ONE_MINUS_SRC_ALPHA,
+				alpha_blend_op = .ADD,
+			},
+		},
+	}
+
+	pipeline := sdl.CreateGPUGraphicsPipeline(
+		platform.renderer.device,
+		sdl.GPUGraphicsPipelineCreateInfo {
+			vertex_shader = vert_shader,
+			fragment_shader = frag_shader,
+			vertex_input_state = {
+				vertex_buffer_descriptions = raw_data(&vert_buf_descs),
+				num_vertex_buffers = len(vert_buf_descs),
+				vertex_attributes = raw_data(&vert_attrs),
+				num_vertex_attributes = len(vert_attrs),
+			},
+			primitive_type = .TRIANGLELIST,
+			rasterizer_state = {fill_mode = .FILL, cull_mode = .NONE},
+			depth_stencil_state = {compare_op = .LESS_OR_EQUAL, enable_depth_test = true, enable_depth_write = false},
+			target_info = {
+				color_target_descriptions = raw_data(&color_target_descs),
+				num_color_targets = len(color_target_descs),
+				depth_stencil_format = .D32_FLOAT,
+				has_depth_stencil_target = true,
+			},
+		},
+	)
+	if pipeline == nil {
+		log_sdl_fatal("Failed to create debug triangle pipeline")
 	}
 	return pipeline
 }
