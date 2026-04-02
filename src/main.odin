@@ -284,18 +284,22 @@ main :: proc() {
 		sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&vbuf_bindings), len(vbuf_bindings))
 		sdl.DrawGPUPrimitives(render_pass, 6, 1, 0, 0)
 
-		// Draw sprite
+		// Draw sprite // todo move this to the game rendering layer later...
 		player := get_player(&platform.game)
 		sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.Sprite))
 
+		sprite_anim_frame := player.sprite_animation.anim_frame
+
+		sprite_rect :=
+			nate_walk_frames[player.direction][sprite_anim_frame] if player.sprite_animation.is_playing else nate_idle_frames[player.direction]
 		sprite_uniforms := Sprite_Uniforms {
 			view_proj    = platform.game.view_proj,
 			camera_right = platform.game.camera_right,
 			camera_up    = platform.game.camera_up,
 			sprite_pos   = player.position,
-			sprite_size  = {1.5, 1.5},
+			sprite_size  = {1.0, 1.0},
 			atlas_size   = {f32(sprite_texture.width), f32(sprite_texture.height)},
-			sprite_rect  = {0, 33, 33, 33}, // idle down frame
+			sprite_rect  = sprite_rect, // idle down frame
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &sprite_uniforms, size_of(Sprite_Uniforms))
 

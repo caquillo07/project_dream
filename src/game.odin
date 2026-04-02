@@ -3,6 +3,7 @@ package main
 import "core:log"
 import "core:math"
 import "core:math/linalg"
+import fmt "core:fmt"
 
 // Game Config
 GameFOV :: 45.0 * math.RAD_PER_DEG
@@ -149,8 +150,8 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 		if is_key_down(game_input, .MoveRight) do move_x += 1
 
 		player := get_player(game)
-		is_moving := move_x != 0 || move_z != 0
-		if is_moving {
+		player_is_moving := move_x != 0 || move_z != 0
+		if player_is_moving {
 			// Normalize so diagonals aren't faster
 			length := math.sqrt(move_x * move_x + move_z * move_z)
 			move_x /= length
@@ -167,6 +168,7 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 			}
 		}
 
+		// follow player
 		offset_y := game.camera.distance * math.sin(game.camera.pitch)
 		offset_z := game.camera.distance * math.cos(game.camera.pitch)
 		game.camera.target = player.position
@@ -176,6 +178,21 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 		game.camera_right = {1, 0, 0}
 		cam_forward := Vec3{0, -math.sin(game.camera.pitch), -math.cos(game.camera.pitch)}
 		game.camera_up = linalg.cross(game.camera_right, cam_forward)
+
+		// sprites animation update
+		if player_is_moving {
+			player.sprite_animation.anim_timer += dt
+			frame_duration := 1.0 / NateWalkFPS
+			// using for instead of if here in case we get a frame rate spike,
+			// we don't play the wrong animation frame
+			for player.sprite_animation.anim_timer >= frame_duration {
+				player.sprite_animation.anim_timer -= frame_duration
+				player.sprite_animation.anim_frame = (player.sprite_animation.anim_frame + 1) % len(nate_walk_frames[player.direction])
+			}
+			player.sprite_animation.is_playing = true
+		} else {
+			player.sprite_animation = {}
+		}
 	}
 
 }
