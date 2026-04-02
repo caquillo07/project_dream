@@ -119,6 +119,7 @@ the project's architecture.
 - [ ] Animation blending/crossfade between clips
 
 ### Phase 7 — Hot Reload + Rewind
+- [ ] Game layer render commands (game produces draw list, platform consumes — the DLL boundary)
 - [ ] Game layer as shared library (separate compilation unit)
 - [ ] Platform struct (input, dt, memory arenas, platform services)
 - [ ] Hot reload: recompile game DLL, reload function pointers, memory persists
