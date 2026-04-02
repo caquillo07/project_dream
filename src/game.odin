@@ -3,12 +3,15 @@ package main
 import "core:log"
 import "core:math"
 import "core:math/linalg"
-import fmt "core:fmt"
 
 // Game Config
 GameFOV :: 45.0 * math.RAD_PER_DEG
 GameNearPlane :: f32(0.1)
 GameFarPlane :: f32(100.0)
+GameCameraUp :: Vec3{0, 1, 0}
+GameCameraRight :: Vec3{1, 0, 0}
+DebugGameCameraEyeCrossSize :: f32(0.3)
+
 //	Entities
 MaxEntities :: 1024
 EntityIDNull :: 0
@@ -16,23 +19,25 @@ EntityIDPlayer :: 1
 PlayerMoveSpeed :: f32(5.0)
 
 Game_State :: struct {
-	view_proj:    linalg.Matrix4f32,
-	camera:       Camera,
-	camera_right: Vec3,
-	camera_up:    Vec3,
+	view_proj:                linalg.Matrix4f32,
+	camera:                   Camera,
+	camera_right:             Vec3,
+	camera_up:                Vec3,
 
 	// entities stuff
-	entities:     [MaxEntities]Entity,
+	entities:                 [MaxEntities]Entity,
 
 	// settings
-	vsync:        bool,
-	quit_game:    bool,
+	vsync:                    bool,
+	quit_game:                bool,
 
 	// Debug
 	//  debug camera state
-	debug_mode:   bool,
-	debug_cam:    Debug_Camera,
-	saved_cam:    Camera,
+	debug_mode:               bool,
+	debug_cam:                Debug_Camera,
+	debug_game_cam_view_proj: linalg.Matrix4f32,
+	debug_game_cam_eye:       Vec3,
+	debug_frustum_corners:    [8]Vec3,
 }
 
 Game_Input :: struct {
@@ -47,10 +52,15 @@ Game_Input :: struct {
 	mouse_right:          Button_State,
 }
 
-// math
+// math and other stuff
 Vec4 :: [4]f32
 Vec3 :: [3]f32
 Vec2 :: [2]f32
+
+Color :: Vec4
+
+ColorYellow :: Color{1, 1, 0, 1}
+ColorCyan :: Color{0, 1, 1, 1}
 
 game_init :: proc(game: ^Game_State) {
 	player := &game.entities[EntityIDPlayer]
@@ -88,11 +98,8 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 			log.infof("Enabling debug mode")
 			// Enter debug mode — save follow camera, init debug camera
 			// at current eye position
-			game.saved_cam = game.camera
-			offset_y := game.camera.distance * math.sin(game.camera.pitch)
-			offset_z := game.camera.distance * math.cos(game.camera.pitch)
 			game.debug_cam = Debug_Camera {
-				position = game.camera.target + {0, offset_y, offset_z},
+				position = game.debug_game_cam_eye,
 				yaw      = 0,
 				pitch    = -game.camera.pitch, // looking down at target
 				speed    = DebugCamSpeedDefault,
@@ -100,7 +107,6 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 		} else {
 			// Exit debug mode — restore follow camera
 			log.infof("Disabling debug mode")
-			game.camera = game.saved_cam
 		}
 	}
 
@@ -133,10 +139,13 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 		if is_key_down(game_input, .CamFlyUp) do game.debug_cam.position.y += move_speed
 		if is_key_down(game_input, .CamFlyDown) do game.debug_cam.position.y -= move_speed
 
-		view := linalg.matrix4_look_at_f32(game.debug_cam.position, game.debug_cam.position + forward, {0, 1, 0})
+		view := linalg.matrix4_look_at_f32(game.debug_cam.position, game.debug_cam.position + forward, GameCameraUp)
 		game.view_proj = proj * view
 		game.camera_right = right
 		game.camera_up = linalg.cross(right, forward)
+
+		// compute the game's camera frustum for debug visualization
+		game.debug_frustum_corners = unproject_frustum_corners(game.debug_game_cam_view_proj)
 	} else {
 		// Scroll zooms follow camera
 		game.camera.distance -= game_input.mouse_scroll_delta * CameraZoomSpeed
@@ -169,15 +178,20 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 		}
 
 		// follow player
+		game.camera.target = player.position
+
 		offset_y := game.camera.distance * math.sin(game.camera.pitch)
 		offset_z := game.camera.distance * math.cos(game.camera.pitch)
-		game.camera.target = player.position
 		eye := game.camera.target + {0, offset_y, offset_z}
-		view := linalg.matrix4_look_at_f32(eye, game.camera.target, {0, 1, 0})
+		view := linalg.matrix4_look_at_f32(eye, game.camera.target, GameCameraUp)
 		game.view_proj = proj * view
-		game.camera_right = {1, 0, 0}
+		game.camera_right = GameCameraRight
 		cam_forward := Vec3{0, -math.sin(game.camera.pitch), -math.cos(game.camera.pitch)}
 		game.camera_up = linalg.cross(game.camera_right, cam_forward)
+
+		// store the camera values for debugging later
+		game.debug_game_cam_eye = eye
+		game.debug_game_cam_view_proj = game.view_proj
 
 		// sprites animation update
 		if player_is_moving {
@@ -187,14 +201,14 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 			// we don't play the wrong animation frame
 			for player.sprite_animation.anim_timer >= frame_duration {
 				player.sprite_animation.anim_timer -= frame_duration
-				player.sprite_animation.anim_frame = (player.sprite_animation.anim_frame + 1) % len(nate_walk_frames[player.direction])
+				player.sprite_animation.anim_frame =
+					(player.sprite_animation.anim_frame + 1) % len(nate_walk_frames[player.direction])
 			}
 			player.sprite_animation.is_playing = true
 		} else {
 			player.sprite_animation = {}
 		}
 	}
-
 }
 
 get_player :: proc(game: ^Game_State) -> ^Entity {
@@ -204,5 +218,4 @@ get_player :: proc(game: ^Game_State) -> ^Entity {
 entity_null :: proc(game: Game_State) -> Entity {
 	return game.entities[EntityIDNull]
 }
-
 

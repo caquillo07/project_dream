@@ -264,6 +264,9 @@ main :: proc() {
 			continue
 		}
 
+		/////// Draw Calls //////
+		// todo split game + platform
+
 		// Draw ground plane
 		sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.Mesh))
 
@@ -311,6 +314,68 @@ main :: proc() {
 		// todo - end of bind_fragment_texture
 
 		sdl.DrawGPUPrimitives(render_pass, 4, 1, 0, 0)
+
+		// debug stuff
+		if platform.game.debug_mode {
+			sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.DebugLines))
+
+			game_camera_frustum_uniforms := Debug_Line_Uniforms {
+				view_proj = platform.game.view_proj,
+			}
+			sdl.PushGPUVertexUniformData(cmd, 0, &game_camera_frustum_uniforms, size_of(Debug_Line_Uniforms))
+
+			debug_frustum_corners := platform.game.debug_frustum_corners
+			frustum_lines := [?]Debug_Line_Vertex {
+				// Near quad`
+				{position = debug_frustum_corners[0], color = ColorYellow},
+				{position = debug_frustum_corners[1], color = ColorYellow},
+				{position = debug_frustum_corners[1], color = ColorYellow},
+				{position = debug_frustum_corners[2], color = ColorYellow},
+				{position = debug_frustum_corners[2], color = ColorYellow},
+				{position = debug_frustum_corners[3], color = ColorYellow},
+				{position = debug_frustum_corners[3], color = ColorYellow},
+				{position = debug_frustum_corners[0], color = ColorYellow},
+				// Far quad
+				{position = debug_frustum_corners[4], color = ColorYellow},
+				{position = debug_frustum_corners[5], color = ColorYellow},
+				{position = debug_frustum_corners[5], color = ColorYellow},
+				{position = debug_frustum_corners[6], color = ColorYellow},
+				{position = debug_frustum_corners[6], color = ColorYellow},
+				{position = debug_frustum_corners[7], color = ColorYellow},
+				{position = debug_frustum_corners[7], color = ColorYellow},
+				{position = debug_frustum_corners[4], color = ColorYellow},
+				// Connecting edges
+				{position = debug_frustum_corners[0], color = ColorYellow},
+				{position = debug_frustum_corners[4], color = ColorYellow},
+				{position = debug_frustum_corners[1], color = ColorYellow},
+				{position = debug_frustum_corners[5], color = ColorYellow},
+				{position = debug_frustum_corners[2], color = ColorYellow},
+				{position = debug_frustum_corners[6], color = ColorYellow},
+				{position = debug_frustum_corners[3], color = ColorYellow},
+				{position = debug_frustum_corners[7], color = ColorYellow},
+			}
+
+			frustum_buf := renderer_upload_vertex_buffer(frustum_lines[:])
+			frustum_buf_vert_bindings := [?]sdl.GPUBufferBinding{{buffer = frustum_buf, offset = 0}}
+			sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&frustum_buf_vert_bindings), len(frustum_buf_vert_bindings))
+			sdl.DrawGPUPrimitives(render_pass, len(frustum_lines), 1, 0, 0)
+
+			// camera eye cross - upload and draw
+			eye := platform.game.debug_game_cam_eye
+			eye_lines := [?]Debug_Line_Vertex {
+				{position = eye + {-DebugGameCameraEyeCrossSize, 0, 0}, color = ColorCyan},
+				{position = eye + {DebugGameCameraEyeCrossSize, 0, 0}, color = ColorCyan},
+				{position = eye + {0, -DebugGameCameraEyeCrossSize, 0}, color = ColorCyan},
+				{position = eye + {0, DebugGameCameraEyeCrossSize, 0}, color = ColorCyan},
+				{position = eye + {0, 0, -DebugGameCameraEyeCrossSize}, color = ColorCyan},
+				{position = eye + {0, 0, DebugGameCameraEyeCrossSize}, color = ColorCyan},
+			}
+
+			eye_buf := renderer_upload_vertex_buffer(eye_lines[:])
+			eye_buf_vert_bidnings := [?]sdl.GPUBufferBinding{{buffer = eye_buf, offset = 0}}
+			sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&eye_buf_vert_bidnings), len(eye_buf_vert_bidnings))
+			sdl.DrawGPUPrimitives(render_pass, len(eye_lines), 1, 0, 0)
+		}
 
 		renderer_end_frame(cmd, render_pass)
 

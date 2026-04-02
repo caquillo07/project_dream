@@ -94,6 +94,14 @@ the project's architecture.
 - [x] Walk animation: cycle frames while moving at 6 FPS, reset on idle
 - [x] Wire sprite_rect from entity animation state to draw call (direction + frame drives rect)
 
+### Phase 5.5 — Debug Visualization (Frustum + Camera)
+- [ ] Debug line shader (position + color, no texture)
+- [ ] Debug line pipeline (LINES topology, no backface cull, depth on)
+- [ ] Compute follow camera frustum corners (inverse view_proj, 8 world-space points)
+- [ ] Draw frustum wireframe (12 lines: 4 near, 4 far, 4 connecting)
+- [ ] Draw camera eye position marker
+- [ ] Only draw when debug_mode is active (viewing saved follow camera)
+
 ### Phase 6 — 3D Model Loading + Rendering
 - [ ] glTF parser (load .glb/.gltf — meshes, materials, node hierarchy)
 - [ ] Upload model mesh data to GPU (vertex buffer, index buffer)
@@ -130,7 +138,7 @@ the project's architecture.
 - Phase 5 — Player Movement + Animation
 
 **In Progress:**
-- Phase 6 — 3D Model Loading + Rendering
+- Phase 5.5 — Debug Visualization (Frustum + Camera)
 
 **Up Next:**
 - Phase 6.5 — Model Animation (Skeletal)
