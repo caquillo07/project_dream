@@ -89,12 +89,28 @@ the project's architecture.
 - [x] Camera follows player position (camera.target = player.position)
 - [x] Direction detection from movement vector (dominant axis, 4-direction for sprite facing)
 - [x] Player faces last movement direction when idle (direction only updates when moving)
-- [ ] Animation state on entity (timer, frame index, playing flag — SpriteAnimation already in sprite.odin)
-- [ ] Sprite frame table (idle/walk rects per direction from nate.png 33x33 grid)
-- [ ] Walk animation: cycle frames while moving, stop on idle frame when stopped
-- [ ] Wire sprite_rect from entity animation state to draw call (replace hardcoded rect)
+- [x] Animation state on entity (timer, frame index, playing flag — SpriteAnimation on Entity)
+- [x] Sprite frame table (idle/walk rects per direction from nate.png 33x33 grid)
+- [x] Walk animation: cycle frames while moving at 6 FPS, reset on idle
+- [x] Wire sprite_rect from entity animation state to draw call (direction + frame drives rect)
 
-### Phase 5.5 — Hot Reload + Rewind
+### Phase 6 — 3D Model Loading + Rendering
+- [ ] glTF parser (load .glb/.gltf — meshes, materials, node hierarchy)
+- [ ] Upload model mesh data to GPU (vertex buffer, index buffer)
+- [ ] Draw static model with mesh pipeline (model matrix from entity transform)
+- [ ] Texture from glTF material (base color) applied to model
+- [ ] Place a test model in the world (tree, rock, or building)
+- [ ] Multiple model instances with different positions
+- [ ] Entity draws either sprite OR model based on entity kind
+
+### Phase 6.5 — Model Animation (Skeletal)
+- [ ] Parse glTF skeleton (joints, inverse bind matrices)
+- [ ] Parse glTF animations (keyframes, interpolation)
+- [ ] Skinning shader (joint matrices in uniform/SSBO)
+- [ ] Play animation on model entity (idle, walk)
+- [ ] Animation blending/crossfade between clips
+
+### Phase 7 — Hot Reload + Rewind
 - [ ] Game layer as shared library (separate compilation unit)
 - [ ] Platform struct (input, dt, memory arenas, platform services)
 - [ ] Hot reload: recompile game DLL, reload function pointers, memory persists
@@ -111,13 +127,14 @@ the project's architecture.
 - Phase 4 — Sprite Pipeline + Billboard
 - Phase 4.5 — Code Cleanup & Architecture
 - Phase 4.75 — Game Layer Split (Casey Style)
+- Phase 5 — Player Movement + Animation
 
 **In Progress:**
-- Phase 5 — Player Movement + Animation
+- Phase 6 — 3D Model Loading + Rendering
 
 **Up Next:**
-- Phase 5 — Player Movement + Animation
-- Phase 5.5 — Hot Reload + Rewind
+- Phase 6.5 — Model Animation (Skeletal)
+- Phase 7 — Hot Reload + Rewind
 
 **Backlog:**
 - Custom logger system (see src/logger.odin for format ideas)

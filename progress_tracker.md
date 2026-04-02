@@ -4,20 +4,33 @@ Newest entries first.
 
 ---
 
-## 2026-03-27 — Phase 5 (in progress): Player Movement
+## 2026-03-27 — Phase 5 Complete: Player Movement + Animation
 
-**What:** Player entity moves in the 3D world with camera following.
+**What:** Player entity moves in the 3D world with animated sprite and camera following.
 
+**Movement:**
 - WASD moves player entity on XZ plane (not camera target)
 - Diagonal movement normalized (no 1.41x speed boost)
 - 4-direction detection from movement vector (dominant axis picks sprite facing)
 - Direction persists when stopped (player faces last movement direction)
 - Camera follows player position (camera.target = player.position)
-- Scroll zoom still works independently
 
-**Up next:** Animation system — SpriteAnimation on entity, frame table for nate.png walk/idle, wire sprite_rect to draw call.
+**Animation:**
+- SpriteAnimation struct on Entity (timer, frame index, is_playing)
+- Sprite frame table: idle_frames and walk_frames arrays indexed by Direction
+- nate.png atlas layout: 33x33 cells, rows = direction (Up/Down/Left/Right), col 0 = idle, cols 1-2 = walk
+- Walk animation cycles at 6 FPS while moving, resets to idle frame 0 when stopped
+- sprite_rect in draw call driven by entity direction + animation state (no more hardcoded rect)
 
-**Key files:** src/game.odin, src/entity.odin, src/sprite.odin
+**Input overhaul (side quest):**
+- Switched from GetKeyboardState polling to pure event-driven input (catches sub-frame presses)
+- Casey's half_transitions pattern: Button_State { ended_down, half_transitions }
+- InputAction enum + [InputAction]Button_State array + binding table (easy to extend)
+- is_pressed/is_down/is_released helpers (raylib-style naming)
+
+**Up next:** Phase 6 — 3D model loading (glTF), then skeletal animation, then hot reload.
+
+**Key files:** src/game.odin, src/entity.odin, src/sprite.odin, src/input.odin
 
 ---
 
