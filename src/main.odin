@@ -1,6 +1,7 @@
 package main
 
 import "base:intrinsics"
+import runtime "base:runtime"
 import "core:fmt"
 import "core:log"
 import "core:mem"
@@ -9,12 +10,6 @@ import sdl "vendor:sdl3"
 
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
-
-Button_State :: struct {
-	is_down:  bool, // held down right now
-	pressed:  bool, // went down this frame
-	released: bool, // went up this frame
-}
 
 Debug_Timing :: struct {
 	fps:                   f32,
@@ -63,6 +58,15 @@ main :: proc() {
 	log.infof("Scratch arena: %s reserved", format_bytes(scratch_reserved))
 
 	// Init SDL
+	_ctx := context
+	sdl.SetLogPriorities(.VERBOSE when ODIN_DEBUG else .INFO)
+	sdl.SetLogOutputFunction(
+		proc "c" (userdata: rawptr, category: sdl.LogCategory, priority: sdl.LogPriority, message: cstring) {
+			context = (cast(^runtime.Context)userdata)^
+			log.debugf("SDL {} [{}]: {}", category, priority, message)
+		},
+		&_ctx,
+	)
 	if !sdl.Init({.VIDEO}) {
 		log_sdl_fatal("Failed to init SDL")
 	}
@@ -163,18 +167,31 @@ main :: proc() {
 			title_ms_max = 0
 		}
 
+		// Process input events
 		reset_game_input(&platform.game_input)
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
 			case .QUIT:
 				game_running = false
-			case .KEY_DOWN:
-				#partial switch event.key.scancode {
-				case .P:
-					global_pause = !global_pause
-					action := "enabled" if global_pause else "disabled"
-					log.infof("Global pause is %s", action)
+			case .WINDOW_FOCUS_LOST:
+				// todo
+				log.infof("window has lost focus")
+			case .WINDOW_MINIMIZED:
+				// todo
+				log.infof("window has been minimized")
+			case .WINDOW_OCCLUDED:
+				// todo
+				log.infof("window has been occluded")
+			case .KEY_DOWN, .KEY_UP:
+				// todo: contexts + raw key array (see input_system_spec.md)
+				is_down := event.type == .KEY_DOWN
+				if !is_down || (is_down && !event.key.repeat) { 	// kind of usesless... but just in case
+					for btn in InputAction {
+						if event.key.scancode == key_bindings[btn] {
+							update_button(&platform.game_input.buttons[btn], is_down)
+						}
+					}
 				}
 			case .MOUSE_WHEEL:
 				// if using natural scrolling, convert back to regular
@@ -204,8 +221,9 @@ main :: proc() {
 			}
 		}
 
-		// Gather input from keyboard state
-		gather_input(&platform.game_input)
+		if button_is_pressed(platform.game_input.buttons[.GlobalGamePause]) {
+			global_pause = !global_pause
+		}
 
 		// Game update
 		previous_debug_mode := platform.game.debug_mode
@@ -218,6 +236,10 @@ main :: proc() {
 				platform.renderer.pixel_width,
 				platform.renderer.pixel_height,
 			)
+		} else {
+			if is_key_pressed(&platform.game_input, .Cancel) {
+				game_running = false
+			}
 		}
 
 		if platform.game.debug_mode != previous_debug_mode {
@@ -309,39 +331,6 @@ main :: proc() {
 		// Wipe scratch — everything allocated this frame is gone
 		free_all(context.temp_allocator)
 	}
-}
-
-update_button :: proc(button: ^Button_State, is_down: bool) {
-	was_down := button.is_down
-	button.is_down = is_down
-	button.pressed = is_down && !was_down
-	button.released = !is_down && was_down
-}
-
-reset_game_input :: proc(input: ^Game_Input) {
-	input.mouse_scroll_delta = 0
-	input.mouse_position_delta = {}
-}
-
-gather_input :: proc(input: ^Game_Input) {
-	keyboard := sdl.GetKeyboardState(nil)
-
-	// game play
-	update_button(&input.move_up, keyboard[sdl.Scancode.W])
-	update_button(&input.move_down, keyboard[sdl.Scancode.S])
-	update_button(&input.move_left, keyboard[sdl.Scancode.A])
-	update_button(&input.move_right, keyboard[sdl.Scancode.D])
-	update_button(&input.action_a, keyboard[sdl.Scancode.SPACE])
-	update_button(&input.action_b, keyboard[sdl.Scancode.E])
-
-	// debug mode
-	update_button(&input.enable_debug_toggle, keyboard[sdl.Scancode.F1])
-	update_button(&input.cam_fly_down, keyboard[sdl.Scancode.Q])
-	update_button(&input.cam_fly_up, keyboard[sdl.Scancode.E])
-
-	// generic actions
-	update_button(&input.cancel, keyboard[sdl.Scancode.ESCAPE])
-	update_button(&input.debug_toggle_vsync, keyboard[sdl.Scancode.V])
 }
 
 time_now :: proc() -> u64 {

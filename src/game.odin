@@ -35,19 +35,7 @@ Game_State :: struct {
 }
 
 Game_Input :: struct {
-	move_up:              Button_State,
-	move_down:            Button_State,
-	move_left:            Button_State,
-	move_right:           Button_State,
-	action_a:             Button_State, // confirm / interact
-	action_b:             Button_State, // cancel / back
-	cancel:               Button_State,
-
-	// debug, editor, etc
-	enable_debug_toggle:  Button_State,
-	debug_toggle_vsync:   Button_State,
-	cam_fly_up:           Button_State,
-	cam_fly_down:         Button_State,
+	buttons:              [InputAction]Button_State,
 
 	// Mouse
 	// Accumulated per-frame
@@ -57,6 +45,11 @@ Game_Input :: struct {
 	mouse_left:           Button_State,
 	mouse_right:          Button_State,
 }
+
+// math
+Vec4 :: [4]f32
+Vec3 :: [3]f32
+Vec2 :: [2]f32
 
 game_init :: proc(game: ^Game_State) {
 	player := &game.entities[EntityIDPlayer]
@@ -77,18 +70,18 @@ game_init :: proc(game: ^Game_State) {
 
 game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f32, window_width, window_height: u32) {
 	// handle app settings
-	if game_input.cancel.pressed {
+	if is_key_pressed(game_input, .Cancel) {
 		game.quit_game = true
 	}
 
-	if game_input.debug_toggle_vsync.pressed {
+	if is_key_pressed(game_input, .DebugToggleVsync) {
 		game.vsync = !game.vsync
 	}
 
 	// handle camera update
 	aspect := f32(window_width) / f32(window_height)
 	proj := linalg.matrix4_perspective_f32(GameFOV, aspect, GameNearPlane, GameFarPlane)
-	if game_input.enable_debug_toggle.pressed {
+	if is_key_pressed(game_input, .DebugToggle) {
 		game.debug_mode = !game.debug_mode
 		if game.debug_mode {
 			log.infof("Enabling debug mode")
@@ -132,12 +125,12 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 		right := Vec3{math.cos(game.debug_cam.yaw), 0, math.sin(game.debug_cam.yaw)}
 		move_speed := game.debug_cam.speed * dt
 
-		if game_input.move_up.is_down do game.debug_cam.position += forward * move_speed
-		if game_input.move_down.is_down do game.debug_cam.position -= forward * move_speed
-		if game_input.move_right.is_down do game.debug_cam.position += right * move_speed
-		if game_input.move_left.is_down do game.debug_cam.position -= right * move_speed
-		if game_input.cam_fly_up.is_down do game.debug_cam.position.y += move_speed
-		if game_input.cam_fly_down.is_down do game.debug_cam.position.y -= move_speed
+		if is_key_down(game_input, .MoveUp) do game.debug_cam.position += forward * move_speed
+		if is_key_down(game_input, .MoveDown) do game.debug_cam.position -= forward * move_speed
+		if is_key_down(game_input, .MoveRight) do game.debug_cam.position += right * move_speed
+		if is_key_down(game_input, .MoveLeft) do game.debug_cam.position -= right * move_speed
+		if is_key_down(game_input, .CamFlyUp) do game.debug_cam.position.y += move_speed
+		if is_key_down(game_input, .CamFlyDown) do game.debug_cam.position.y -= move_speed
 
 		view := linalg.matrix4_look_at_f32(game.debug_cam.position, game.debug_cam.position + forward, {0, 1, 0})
 		game.view_proj = proj * view
@@ -150,10 +143,10 @@ game_update_and_render :: proc(game: ^Game_State, game_input: ^Game_Input, dt: f
 
 		move_x: f32
 		move_z: f32
-		if game_input.move_up.is_down do move_z -= 1
-		if game_input.move_down.is_down do move_z += 1
-		if game_input.move_left.is_down do move_x -= 1
-		if game_input.move_right.is_down do move_x += 1
+		if is_key_down(game_input, .MoveUp) do move_z -= 1
+		if is_key_down(game_input, .MoveDown) do move_z += 1
+		if is_key_down(game_input, .MoveLeft) do move_x -= 1
+		if is_key_down(game_input, .MoveRight) do move_x += 1
 
 		player := get_player(game)
 		is_moving := move_x != 0 || move_z != 0
@@ -194,4 +187,5 @@ get_player :: proc(game: ^Game_State) -> ^Entity {
 entity_null :: proc(game: Game_State) -> Entity {
 	return game.entities[EntityIDNull]
 }
+
 
