@@ -111,6 +111,16 @@ the project's architecture.
 - [ ] Multiple model instances with different positions
 - [ ] Entity draws either sprite OR model based on entity kind
 
+### Phase 6.25 — Renderer Cleanup
+- [ ] SPIR-V reflection for shader resource counts (drop manual num_samplers/num_uniform_buffers)
+- [ ] Debug naming for GPU resources (textures, buffers, pipelines — visible in RenderDoc)
+- [ ] GPU device info logging on init (device name, driver version)
+- [ ] MAILBOX present mode with VSYNC fallback
+- [ ] Typed transfer buffer mapping (for future per-frame streaming vertex data)
+- [ ] Learn arena temp memory marks pattern (check vmem.Arena support)
+
+Spec: `docs/todo_specs/renderer_improvements.md`
+
 ### Phase 6.5 — Model Animation (Skeletal)
 - [ ] Parse glTF skeleton (joints, inverse bind matrices)
 - [ ] Parse glTF animations (keyframes, interpolation)
