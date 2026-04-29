@@ -158,6 +158,10 @@ Spec: `docs/todo_specs/renderer_improvements.md`
 
 **Backlog:**
 - Custom logger system (see src/logger.odin for format ideas)
+- Tiger Style: add arena hard-limit assertions (crash in debug if permanent/cache/scratch exceed budget)
+- Tiger Style: assertion pass over existing code (entity bounds, camera matrix NaN, tile validity)
+- Tiger Style: audit naming for MSB order (see docs/references/tiger_style.md)
+- Tiger Style: input recording/replay for deterministic debugging (natural fit at Phase 7)
 
 **Blocked:**
 - (none)

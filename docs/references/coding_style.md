@@ -45,6 +45,57 @@ never sprinkled everywhere as premature "optimization."
 
 ---
 
+## Naming Rules
+
+Adapted from Tiger Style. See `docs/references/tiger_style.md` for full rationale.
+
+**MSB ordering.** Most significant word first, qualifiers last. Related fields
+line up visually in source:
+
+```odin
+entity_count_max :: 1024   // not max_entity_count
+speed_max        :: 10.0   // not max_speed
+speed_min        :: 1.0    // not min_speed
+```
+
+**Nouns, not gerunds.** `pipeline`, not `pipelining`. You say "the pipeline is full"
+in conversation — name it that way in code.
+
+**Don't abbreviate.** `physical_size`, not `p_size`. Exception: universally
+understood abbreviations (`dt`, `fps`, `uv`, `fov`).
+
+**Symmetrical names match in weight.** `source`/`target` (2+2 syllables), not
+`src`/`destination` (1+4).
+
+**Don't overload across layers.** If a word means something in entities AND
+in the renderer, rename one so it's always clear which layer you mean.
+
+**Include units when ambiguous.** `camera_fov_degrees`, `tile_size_pixels`,
+`speed_units_per_sec`.
+
+---
+
+## Assertions
+
+Assert liberally. Check not only what you expect, but what you **don't** expect
+(negative space). In debug builds, crash immediately on violation.
+
+```odin
+// Positive: what we expect
+assert(entity_count > 0)
+
+// Negative space: what should never be true
+assert(!math.is_nan(view_proj[0][0]))
+assert(scratch.used <= scratch.capacity)
+```
+
+- Arena limits are hard limits. Exceeding one is a design bug, not a runtime condition.
+- Assertion failures in game logic indicate programmer error. Don't "handle" them.
+- Debug builds: crash. Release builds: log + continue (games shouldn't crash on players).
+- When adding a new data structure, answer: how much memory? Is it bounded? What's the max?
+
+---
+
 ## Memory Rules
 
 - **No malloc/free in game code. Ever.** Arenas only.
@@ -109,6 +160,8 @@ Every piece of code (generated or handwritten) gets checked against:
 - [ ] **Data-oriented.** Are we thinking about the data, not "objects"?
 - [ ] **Casey test.** Would he fire you?
 - [ ] **Simplicity.** Is there a simpler way that works?
+- [ ] **Naming.** MSB order, no abbreviations, nouns not gerunds, units when ambiguous.
+- [ ] **Assertions.** Are preconditions and invariants asserted? Including negative space?
 
 ---
 
