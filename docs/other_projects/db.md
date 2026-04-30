@@ -14,3 +14,8 @@ Raylib based game engine/full renderer, has basic physics, lots of shader exampl
 Full Luau game engine on Zune runtime. Opposite to our philosophy but has a few stealable ideas (FFI binding generator, octree, pure-scripting-language physics)
  - Repo: https://github.com/Kinemium/Kinemium-Engine
  - Details: [kinemium-engine.md](kinemium-engine.md)
+
+## MoonHug
+Unity-inspired game engine + editor written in **Odin** (same as our game). Data-oriented, generational pools, billboard sprites, scene serialization. Most directly relevant reference we have.
+ - Repo: https://github.com/MoonHug-Editor/moonhug
+ - Details: [moonhug.md](moonhug.md)

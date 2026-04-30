@@ -103,13 +103,70 @@ the project's architecture.
 - [x] Only draw when debug_mode is active (viewing saved follow camera)
 
 ### Phase 6 — 3D Model Loading + Rendering
-- [ ] glTF parser (load .glb/.gltf — meshes, materials, node hierarchy)
-- [ ] Upload model mesh data to GPU (vertex buffer, index buffer)
-- [ ] Draw static model with mesh pipeline (model matrix from entity transform)
-- [ ] Texture from glTF material (base color) applied to model
-- [ ] Place a test model in the world (tree, rock, or building)
-- [ ] Multiple model instances with different positions
-- [ ] Entity draws either sprite OR model based on entity kind
+
+**Goal:** Load glTF models, draw them textured in the 3D world with proper transforms.
+
+**Library:** glTF2 (pure Odin, /Users/hector/code/ext/glTF2). Used behind our own interface
+so it can be swapped later. Load with temp allocator, copy to our structs on permanent, scratch wiped.
+
+**Reference:** C engine at sdl3_3d_engine — mesh_loader_gltf.c, model.h/c, renderer.h/c, mesh.frag.glsl
+
+#### 6A — Model Loader Interface + glTF Parsing
+- [x] Our own model data structs (Model, Model_Mesh, Model_Material, Model_Vertex)
+- [x] Model_Vertex format: position, uv, normal, bone_ids ([4]u8), bone_weights ([4]f32)
+- [x] load_model(path) / load_model_from_file(path) — glTF2 behind our interface
+      - Parse .glb via glTF2 (temp allocator), copy to our structs (permanent)
+      - read_accessor($T) helper handles byte_stride (glTF2 library doesn't support it)
+      - Extract positions, normals, UVs from mesh primitive attributes
+      - Extract indices (u16 → u32 conversion)
+      - Extract embedded textures via buffer_view (GLB) or URI (external files)
+      - Extract material properties (base_color_factor, metallic, roughness)
+      - mesh_material[] indirection (Raylib pattern) — multiple meshes can share materials
+- [x] UV flip: NOT needed — SDL3 GPU matches glTF UV convention (top-left origin)
+- [x] Test model: assets/models/animated_halloween_bat.glb (mesh + texture + animations)
+
+#### 6B — GPU Upload + Static Model Drawing
+- [x] Unified renderer_upload_buffer(data, usage, name) — handles vertex + index buffers
+      - Polymorphic []$T, optional debug naming via SDL properties (ODIN_DEBUG only)
+- [x] load_model calls upload internally (load_model_from_file + upload split available)
+- [x] Build model matrix: translation * rotation * scale via linalg
+- [x] Draw indexed: bind mesh pipeline, push uniforms, bind texture per material, DrawGPUIndexedPrimitives
+- [x] Depth test works with model + ground + sprite all in scene
+
+#### 6C — Materials
+- [x] Model_Material struct: base_color_texture, color_tint (Vec4), metallic_factor, roughness_factor
+- [x] Bind correct texture per material when drawing (per-mesh loop)
+- [x] Fragment shader: sample texture * color_tint (via Mesh_Uniforms, pushed to both vert + frag)
+- [x] Store metallic_factor, roughness_factor in material (not used in shader yet)
+- [ ] Handle models with no texture (use white 1x1 fallback texture)
+- [ ] unload_model proc (release GPU buffers + textures)
+
+#### 6D — Multiple Instances + Entity Integration
+- [ ] Asset cache: loaded models stored by path, load once reference many
+- [ ] Entity_Kind for static models (e.g. .StaticModel)
+- [ ] Entity references loaded model by handle/index (not by duplicating mesh data)
+- [ ] Multiple entities sharing same model, different world transforms
+- [ ] Place several instances in the world (e.g. 3-4 trees at different positions)
+- [ ] Draw loop: iterate entities, skip .None, draw sprite or model based on kind
+- [ ] Linear sampler for 3D models (nearest is for pixel art sprites)
+
+#### Design Notes (for future phases, DO NOT implement now)
+- **Lighting:** Will need reworked Mesh_Uniforms with sun/point/spot light data and updated
+  fragment shader. C engine packs up to 8 point + 8 spot lights in one uniform struct.
+  Day/night cycle + lighting zones. See lighting.h in C engine.
+- **Skeletal animation (Phase 6.5):** Model_Vertex already has room for bone_ids + weights.
+  Will need skinned pipeline variant (same frag shader, different vert shader that blends
+  bone matrices). Bone matrices pushed as second uniform buffer at set=1, binding=1.
+  Animator struct: current clip, next clip, blend factor, crossfade duration.
+  Key gotchas from C engine: bones without animation channels must default to bind pose
+  (not identity). Quaternion slerp needs shortest-path correction (negate if dot < 0).
+  Blend poses (T/R/S separately), not matrices.
+- **Instancing (GPU):** Not needed yet. Individual draw calls fine for Pokemon-scale (<256 entities).
+  Optimize when profiling says so. When ready: instance buffer with per-instance model matrices.
+- **Prefabs:** Gameplay/editor concept. An entity template that spawns with a model + transform +
+  components. Not a rendering concern.
+- **PBR shader:** Start with diffuse * texture (like C engine). Upgrade to metallic/roughness
+  workflow when lighting lands. Material struct already stores the factors.
 
 ### Phase 6.25 — Renderer Cleanup
 - [ ] SPIR-V reflection for shader resource counts (drop manual num_samplers/num_uniform_buffers)
@@ -122,11 +179,17 @@ the project's architecture.
 Spec: `docs/todo_specs/renderer_improvements.md`
 
 ### Phase 6.5 — Model Animation (Skeletal)
-- [ ] Parse glTF skeleton (joints, inverse bind matrices)
-- [ ] Parse glTF animations (keyframes, interpolation)
-- [ ] Skinning shader (joint matrices in uniform/SSBO)
+- [ ] Extract skeleton from glTF: joints, inverse bind matrices, parent hierarchy, bind pose (T/R/S)
+- [ ] Extract animation clips: samplers (keyframes + timestamps), channels (bone + target property)
+- [ ] Bone struct: parent index, inverse_bind mat4, bind pose T/R/S
+- [ ] Animation sampling: keyframe lookup, lerp for pos/scale, slerp for rotation (shortest path)
+- [ ] Bone hierarchy walk: local TRS → multiply by parent world transform → final = world * inverse_bind
+- [ ] Skinned vertex shader: weighted blend of 4 bone matrices per vertex
+- [ ] Skinned pipeline variant (same frag, different vert with bone uniform buffer at set=1 binding=1)
+- [ ] Animator: current clip, playback time, looping
+- [ ] Animation crossfade/blending between clips (blend poses, not matrices)
 - [ ] Play animation on model entity (idle, walk)
-- [ ] Animation blending/crossfade between clips
+- [ ] Debug bone visualization: draw lines from each bone to its parent (uses existing debug line pipeline)
 
 ### Phase 7 — Hot Reload + Rewind
 - [ ] Game layer render commands (game produces draw list, platform consumes — the DLL boundary)
@@ -162,6 +225,11 @@ Spec: `docs/todo_specs/renderer_improvements.md`
 - Tiger Style: assertion pass over existing code (entity bounds, camera matrix NaN, tile validity)
 - Tiger Style: audit naming for MSB order (see docs/references/tiger_style.md)
 - Tiger Style: input recording/replay for deterministic debugging (natural fit at Phase 7)
+- Lighting system (directional sun, point lights, spotlights, ambient, day/night, zones)
+- PBR shader upgrade (metallic/roughness workflow, once lighting lands)
+- GPU instancing for environment assets (trees, grass, rocks — when profiling demands it)
+- Platform render extract (platform_draw proc or render command buffer)
+- Input contexts + raw key array + gamepad (see input_system_spec.md)
 
 **Blocked:**
 - (none)
@@ -188,6 +256,15 @@ Spec: `docs/todo_specs/renderer_improvements.md`
 - Accumulate mouse/scroll deltas across events, apply once per frame in game layer — avoids compounding bug
 - Game owns projection (FOV, near/far) — platform just passes window dimensions
 - Watch for sneaky `platform.*` globals leaking into game layer procs that take `game: ^Game_State`
+- glTF UV flip: NOT needed for SDL3 GPU — glTF top-left origin matches SDL3's expectation. Don't flip v.
+- glTF2 Odin library: `buffer_slice` doesn't support byte_stride — write own `read_accessor($T)` to handle interleaved vertex data
+- GLB embedded textures: image.uri can be nil — check image.buffer_view for textures stored in the binary chunk
+- glTF attribute names are spec-mandated strings: "POSITION", "NORMAL", "TEXCOORD_0", "JOINTS_0", "WEIGHTS_0" — watch for typos (no compile-time check)
+- Odin `defer` is block-scoped, not function-scoped (unlike Go) — `defer` inside a `case`/`if` runs at block exit, not proc exit
+- SDL3 GPU uniform sets: set 0 = vert samplers, set 1 = vert uniforms, set 2 = frag samplers, set 3 = frag uniforms
+- PushGPUVertexUniformData and PushGPUFragmentUniformData are separate — vert push doesn't reach frag shader
+- When adding fields to a shared uniform struct (e.g. color_tint to Mesh_Uniforms), all draw calls using that struct must set the new field (or get zero = black)
+- renderer_upload_buffer: unified proc for vertex + index uploads, polymorphic []$T, usage flag distinguishes them
 
 ---
 

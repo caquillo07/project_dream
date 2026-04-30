@@ -7,15 +7,21 @@
       "Bash(find:*)",
       "Bash(ls:*)",
       "Bash(file:*)",
+
       "Read(docs/**)",
       "Write(docs/**)",
       "Edit(docs/**)",
+
       "Read(todo.md)",
       "Write(todo.md)",
       "Edit(todo.md)",
+
       "Read(progress_tracker.md)",
       "Write(progress_tracker.md)",
-      "Edit(progress_tracker.md)"
+      "Edit(progress_tracker.md)",
+
+      "Read(/home/hector/code/sdl3_3d_engine/**)",
+      "Read(/home/hector/ext/**)"
     ]
   }
 }

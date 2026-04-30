@@ -4,6 +4,43 @@ Newest entries first.
 
 ---
 
+## 2026-04-30 — Phase 6A-C: 3D Model Loading + Rendering
+
+**What:** Load glTF models, draw them textured in the 3D world with transforms and per-material color tint.
+
+**Model loading (glTF2):**
+- glTF2 pure Odin library behind our own `load_model` / `load_model_from_file` interface
+- Custom `read_accessor($T)` bypasses library's `buffer_slice` (doesn't support byte_stride)
+- Extracts vertices (position, uv, normal), indices, embedded textures, material properties
+- GLB embedded textures via buffer_view path (not URI — common in .glb files)
+- glTF data parsed on scratch allocator, model data copied to permanent
+- Raylib-inspired API: Model, Model_Mesh, Model_Material, mesh_material[] indirection
+
+**Rendering:**
+- Unified `renderer_upload_buffer(data, usage, name)` — polymorphic, handles vertex + index
+- Optional debug naming for GPU resources via SDL properties (ODIN_DEBUG only)
+- Model matrix: translation * rotation * scale, pushed per-mesh with material color_tint
+- Mesh_Uniforms extended with color_tint, pushed to both vertex and fragment stages
+- DrawGPUIndexedPrimitives for indexed geometry
+
+**Texture loading refactor:**
+- `load_texture_from_memory(buf, type)` for embedded GLB textures
+- `load_texture_from_file` now reads file then calls `load_texture_from_memory`
+- PNG + JPEG support (Image_Type enum, glTF only allows these two)
+
+**Gotchas encountered:**
+- UV flip not needed (SDL3 GPU matches glTF convention)
+- glTF2 library asserts on byte_stride — needed custom accessor reader
+- GLB textures stored via buffer_view, not URI — need both code paths
+- Odin defer is block-scoped (not function-scoped like Go) — caused use-after-free in switch/case
+- Adding fields to uniform struct requires updating ALL draw calls using it
+
+**Remaining:** unload_model, white fallback texture, entity integration (6D)
+
+**Key files:** src/model.odin, src/renderer.odin, src/main.odin, shaders/mesh.vert.glsl, shaders/mesh.frag.glsl
+
+---
+
 ## 2026-03-27 — Phase 5.5 Complete: Debug Visualization
 
 **What:** Frustum wireframe and camera eye marker visible in debug mode (F1).

@@ -4,6 +4,8 @@ import "base:intrinsics"
 import runtime "base:runtime"
 import "core:fmt"
 import "core:log"
+import math "core:math"
+import "core:math/linalg"
 import "core:mem"
 import vmem "core:mem/virtual"
 import sdl "vendor:sdl3"
@@ -72,10 +74,12 @@ main :: proc() {
 	}
 	defer sdl.Quit()
 
-	// init renderer, then clear the temp allocator to let the game start fresh
+	// init renderer and all assets needed, then clear the temp allocator to
+	// let the game start fresh.
+	temp_scratch_arena := vmem.arena_temp_begin(&scratch_arena)
+
 	init_renderer()
 	defer deinit_renderer()
-	free_all(context.temp_allocator)
 
 	// Procedural checkerboard texture
 	CHECKER_SIZE :: 64
@@ -93,28 +97,33 @@ main :: proc() {
 		}
 	}
 
+	log.info("loading ground plane")
 	ground_texture := load_texture_from_pixels(CHECKER_SIZE, CHECKER_SIZE, checker_pixels[:])
 	defer unload_texture(ground_texture)
 
 	// Ground quad — 6 vertices on XZ plane at Y=0
 	GROUND_HALF :: f32(10.0)
 	UV_TILES :: f32(5.0) // how many times the checkerboard repeats
-	ground_verts := [6]Mesh_Vertex {
+	ground_verts := [6]Model_Vertex {
 		// Triangle 1 (CCW when viewed from above: +Y)
-		{{-GROUND_HALF, 0, -GROUND_HALF}, {0, 0}, {0, 1, 0}},
-		{{-GROUND_HALF, 0, GROUND_HALF}, {0, UV_TILES}, {0, 1, 0}},
-		{{GROUND_HALF, 0, GROUND_HALF}, {UV_TILES, UV_TILES}, {0, 1, 0}},
+		{{-GROUND_HALF, 0, -GROUND_HALF}, {0, 0}, {0, 1, 0}, {}, {}},
+		{{-GROUND_HALF, 0, GROUND_HALF}, {0, UV_TILES}, {0, 1, 0}, {}, {}},
+		{{GROUND_HALF, 0, GROUND_HALF}, {UV_TILES, UV_TILES}, {0, 1, 0}, {}, {}},
 		// Triangle 2
-		{{-GROUND_HALF, 0, -GROUND_HALF}, {0, 0}, {0, 1, 0}},
-		{{GROUND_HALF, 0, GROUND_HALF}, {UV_TILES, UV_TILES}, {0, 1, 0}},
-		{{GROUND_HALF, 0, -GROUND_HALF}, {UV_TILES, 0}, {0, 1, 0}},
+		{{-GROUND_HALF, 0, -GROUND_HALF}, {0, 0}, {0, 1, 0}, {}, {}},
+		{{GROUND_HALF, 0, GROUND_HALF}, {UV_TILES, UV_TILES}, {0, 1, 0}, {}, {}},
+		{{GROUND_HALF, 0, -GROUND_HALF}, {UV_TILES, 0}, {0, 1, 0}, {}, {}},
 	}
 
-	ground_mesh_vertex_buffer := renderer_upload_vertex_buffer(ground_verts[:])
+	ground_mesh_vertex_buffer := renderer_upload_buffer(ground_verts[:], .VERTEX)
 	defer renderer_release_vertex_buffer(ground_mesh_vertex_buffer)
 
 	sprite_texture := load_texture("assets/sprites/nate.png")
 	defer unload_texture(sprite_texture)
+
+	// loading a model
+	bat_model, bat_model_ok := load_model("assets/models/animated_halloween_bat.glb")
+	assert(bat_model_ok, "failed to load bat model")
 
 	// Title bar timing display — sampled every 0.5s
 	TITLE_UPDATE_INTERVAL :: 0.5
@@ -126,6 +135,10 @@ main :: proc() {
 
 	platform.debug_timing.platform_init_elapsed = elapsed_ms(main_started_at)
 	log.infof("platform init took %.2fms", platform.debug_timing.platform_init_elapsed)
+
+	// clear the temp arena so we can start the game loop fresh
+	vmem.arena_temp_end(temp_scratch_arena)
+	vmem.arena_check_temp(&scratch_arena)
 
 	// Main loop and Frame timing
 	game_init(&platform.game)
@@ -271,10 +284,12 @@ main :: proc() {
 		sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.Mesh))
 
 		uniforms := Mesh_Uniforms {
-			view_proj = platform.game.view_proj,
-			model     = 1, // identity
+			view_proj  = platform.game.view_proj,
+			model      = linalg.MATRIX4F32_IDENTITY,
+			color_tint = Vec4{1, 1, 1, 1}, // white = no tint
 		}
 		sdl.PushGPUVertexUniformData(cmd, 0, &uniforms, size_of(Mesh_Uniforms))
+		sdl.PushGPUFragmentUniformData(cmd, 0, &uniforms, size_of(Mesh_Uniforms))
 
 		// todo - bind_fragment_texture
 		tex_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
@@ -314,6 +329,45 @@ main :: proc() {
 		// todo - end of bind_fragment_texture
 
 		sdl.DrawGPUPrimitives(render_pass, 4, 1, 0, 0)
+
+		// draw bat model
+		// world position, always in order translation * rotation * scale
+		model_matrix :=
+			linalg.matrix4_translate(Vec3{0, 2, 0}) *
+			linalg.matrix4_rotate(math.to_radians(f32(-90)), Vec3{1, 0, 0}) *
+			linalg.matrix4_scale(Vec3{0.3, 0.3, 0.3})
+
+		sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.Mesh))
+
+		for mesh, i in bat_model.meshes {
+			material := bat_model.materials[bat_model.mesh_material[i]]
+			mesh_uniforms := Mesh_Uniforms {
+				view_proj  = platform.game.view_proj,
+				model      = model_matrix,
+				color_tint = material.color_tint * {0.5, 1, 0.5, 0.5},
+			}
+			sdl.PushGPUVertexUniformData(cmd, 0, &mesh_uniforms, size_of(Mesh_Uniforms))
+			sdl.PushGPUFragmentUniformData(cmd, 0, &mesh_uniforms, size_of(Mesh_Uniforms))
+
+			if material.base_color_texture.sdl_texture != nil {
+				material_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
+					{
+						texture = material.base_color_texture.sdl_texture,
+						sampler = platform.renderer.nearest_repeat_sampler,
+					},
+				}
+
+				sdl.BindGPUFragmentSamplers(
+					render_pass,
+					0,
+					raw_data(&material_sampler_bindings),
+					len(material_sampler_bindings),
+				)
+			}
+			sdl.BindGPUVertexBuffers(render_pass, 0, &sdl.GPUBufferBinding{buffer = mesh.vertex_buffer}, 1)
+			sdl.BindGPUIndexBuffer(render_pass, sdl.GPUBufferBinding{buffer = mesh.index_buffer}, ._32BIT)
+			sdl.DrawGPUIndexedPrimitives(render_pass, u32(len(mesh.indices)), 1, 0, 0, 0)
+		}
 
 		// debug stuff
 		if platform.game.debug_mode {
@@ -373,7 +427,7 @@ main :: proc() {
 
 			sdl.BindGPUGraphicsPipeline(render_pass, renderer_pipeline(.DebugTriangles))
 			sdl.PushGPUVertexUniformData(cmd, 0, &game_camera_frustum_uniforms, size_of(Debug_Line_Uniforms))
-			frustum_tris_buf := renderer_upload_vertex_buffer(frustum_tris[:])
+			frustum_tris_buf := renderer_upload_buffer(frustum_tris[:], .VERTEX)
 			defer renderer_release_vertex_buffer(frustum_tris_buf)
 
 			frustum_tris_vert_buf := [?]sdl.GPUBufferBinding{{buffer = frustum_tris_buf, offset = 0}}
@@ -414,7 +468,7 @@ main :: proc() {
 				{position = debug_frustum_corners[7], color = ColorYellow},
 			}
 
-			frustum_buf := renderer_upload_vertex_buffer(frustum_lines[:])
+			frustum_buf := renderer_upload_buffer(frustum_lines[:], .VERTEX)
 			defer renderer_release_vertex_buffer(frustum_buf)
 			frustum_buf_vert_bindings := [?]sdl.GPUBufferBinding{{buffer = frustum_buf, offset = 0}}
 			sdl.BindGPUVertexBuffers(
@@ -436,7 +490,7 @@ main :: proc() {
 				{position = eye + {0, 0, DebugGameCameraEyeCrossSize}, color = ColorCyan},
 			}
 
-			eye_buf := renderer_upload_vertex_buffer(eye_lines[:])
+			eye_buf := renderer_upload_buffer(eye_lines[:], .VERTEX)
 			eye_buf_vert_bidnings := [?]sdl.GPUBufferBinding{{buffer = eye_buf, offset = 0}}
 			sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(&eye_buf_vert_bidnings), len(eye_buf_vert_bidnings))
 			sdl.DrawGPUPrimitives(render_pass, len(eye_lines), 1, 0, 0)

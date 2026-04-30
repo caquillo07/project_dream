@@ -3,12 +3,16 @@ package main
 import "core:bytes"
 import "core:c"
 import "core:fmt"
+import "core:image"
+import "core:image/jpeg"
 import "core:image/png"
 import "core:log"
 import "core:math"
 import "core:math/linalg"
 import "core:mem"
 import "core:os"
+import filepath "core:path/filepath"
+import strings "core:strings"
 import sdl "vendor:sdl3"
 
 Pipeline_Kind :: enum {
@@ -34,6 +38,11 @@ Texture :: struct {
 	sdl_texture: ^sdl.GPUTexture,
 	width:       u32,
 	height:      u32,
+}
+
+Imagine_Type :: enum {
+	PNG,
+	JPEG,
 }
 
 init_renderer :: proc() {
@@ -132,7 +141,7 @@ init_renderer :: proc() {
 	mesh_vert_shader := load_shader("build/shaders/mesh.vert.spv", .VERTEX, 1, 0)
 	defer sdl.ReleaseGPUShader(platform.renderer.device, mesh_vert_shader)
 	shader_count += 1
-	mesh_frag_shader := load_shader("build/shaders/mesh.frag.spv", .FRAGMENT, 0, 1)
+	mesh_frag_shader := load_shader("build/shaders/mesh.frag.spv", .FRAGMENT, 1, 1)
 	defer sdl.ReleaseGPUShader(platform.renderer.device, mesh_frag_shader)
 	shader_count += 1
 
@@ -156,8 +165,14 @@ init_renderer :: proc() {
 	defer sdl.ReleaseGPUShader(platform.renderer.device, debug_line_frag_shader)
 	shader_count += 1
 
-	platform.renderer.pipelines[.DebugLines] = create_debug_line_pipeline(debug_line_vert_shader, debug_line_frag_shader)
-	platform.renderer.pipelines[.DebugTriangles] = create_debug_triangle_pipeline(debug_line_vert_shader, debug_line_frag_shader)
+	platform.renderer.pipelines[.DebugLines] = create_debug_line_pipeline(
+		debug_line_vert_shader,
+		debug_line_frag_shader,
+	)
+	platform.renderer.pipelines[.DebugTriangles] = create_debug_triangle_pipeline(
+		debug_line_vert_shader,
+		debug_line_frag_shader,
+	)
 
 	// Report shader compilation time
 	shader_elapsed := elapsed_ms(shader_start)
@@ -298,17 +313,51 @@ load_shader :: proc(
 load_texture :: proc {
 	load_texture_from_file,
 	load_texture_from_pixels,
+	load_texture_from_memory,
 }
 
 load_texture_from_file :: proc(path: string) -> Texture {
-	img, err := png.load(path, {.alpha_add_if_missing}, context.temp_allocator)
-	defer png.destroy(img)
-	if err != nil {
-		log.errorf("failed to load texture from image %s: %v", path, err)
-		panic("texture load failed")
+	file_ext := strings.to_lower(filepath.ext(path), context.temp_allocator)
+	image_type: Imagine_Type
+	if file_ext == ".png" {
+		image_type = .PNG
+	} else if file_ext == ".jpg" || file_ext == ".jpeg" {
+		image_type = .JPEG
+	} else {
+		panic(fmt.tprintf("unknown file type for %s, must be 'png', 'jpeg', or 'jpg'", path))
 	}
 
-	log.infof("Loading texture: %s", path)
+	buf, err := os.read_entire_file(path, context.temp_allocator)
+	if err != nil {
+		log.errorf("Failed to read file: %s", path)
+		panic("texture file read failed")
+	}
+	buf_len := len(buf)
+	_ = buf_len
+	return load_texture_from_memory(buf, image_type)
+}
+
+load_texture_from_memory :: proc(buf: []byte, image_type: Imagine_Type = .PNG) -> Texture {
+	img: ^image.Image
+	err: image.Error
+	switch image_type {
+	case .PNG:
+		img, err = png.load_from_bytes(buf, {png.Options.alpha_add_if_missing}, context.temp_allocator)
+	case .JPEG:
+		img, err = jpeg.load_from_bytes(buf, {jpeg.Options.alpha_add_if_missing}, context.temp_allocator)
+	}
+	defer if image_type == .PNG {
+		png.destroy(img)
+	}
+	defer if image_type == .JPEG {
+		jpeg.destroy(img)
+	}
+	if err != nil {
+		log.errorf("failed to decode %v: %v", image_type, err)
+		panic("texture image load failed")
+	}
+
+	log.info("Loading texture from memory buffer")
 	return load_texture_from_pixels(u32(img.width), u32(img.height), bytes.buffer_to_bytes(&img.pixels))
 }
 
@@ -365,38 +414,49 @@ renderer_pipeline :: proc(kind: Pipeline_Kind) -> ^sdl.GPUGraphicsPipeline {
 	return platform.renderer.pipelines[kind]
 }
 
-renderer_upload_vertex_buffer :: proc(data: []$T) -> ^sdl.GPUBuffer {
+renderer_upload_buffer :: proc(data: []$T, usage: sdl.GPUBufferUsageFlag, name: string = "") -> ^sdl.GPUBuffer {
 	data_size := u32(len(data) * size_of(T))
-	vertex_buffer := sdl.CreateGPUBuffer(
-		platform.renderer.device,
-		sdl.GPUBufferCreateInfo{usage = {.VERTEX}, size = data_size},
-	)
-	if vertex_buffer == nil {
-		log_sdl_fatal("Failed to create vertex buffer")
+	ci := sdl.GPUBufferCreateInfo {
+		usage = {usage},
+		size  = data_size,
+	}
+	when ODIN_DEBUG {
+		if name != "" {
+			ci.props = sdl.CreateProperties()
+			name_c := strings.clone_to_cstring(name, context.temp_allocator)
+			sdl.SetStringProperty(ci.props, sdl.PROP_GPU_BUFFER_CREATE_NAME_STRING, name_c)
+		}
+	}
+	buffer := sdl.CreateGPUBuffer(platform.renderer.device, ci)
+	if buffer == nil {
+		log_sdl_fatal("Failed to create GPU buffer")
 	}
 
+	when ODIN_DEBUG {
+		if name != "" do sdl.DestroyProperties(ci.props)
+	}
 	// Upload to GPU with a copy pass
-	vert_transfer := sdl.CreateGPUTransferBuffer(
+	transfer := sdl.CreateGPUTransferBuffer(
 		platform.renderer.device,
 		sdl.GPUTransferBufferCreateInfo{usage = .UPLOAD, size = data_size},
 	)
-	vert_ptr := sdl.MapGPUTransferBuffer(platform.renderer.device, vert_transfer, false)
-	mem.copy(vert_ptr, raw_data(data), int(data_size))
-	sdl.UnmapGPUTransferBuffer(platform.renderer.device, vert_transfer)
+	transfer_ptr := sdl.MapGPUTransferBuffer(platform.renderer.device, transfer, false)
+	mem.copy(transfer_ptr, raw_data(data), int(data_size))
+	sdl.UnmapGPUTransferBuffer(platform.renderer.device, transfer)
 
 	upload_cmd := sdl.AcquireGPUCommandBuffer(platform.renderer.device)
 	copy_pass := sdl.BeginGPUCopyPass(upload_cmd)
 	sdl.UploadToGPUBuffer(
 		copy_pass,
-		sdl.GPUTransferBufferLocation{transfer_buffer = vert_transfer, offset = 0},
-		sdl.GPUBufferRegion{buffer = vertex_buffer, offset = 0, size = data_size},
+		sdl.GPUTransferBufferLocation{transfer_buffer = transfer, offset = 0},
+		sdl.GPUBufferRegion{buffer = buffer, offset = 0, size = data_size},
 		false,
 	)
 	sdl.EndGPUCopyPass(copy_pass)
-	assert(sdl.SubmitGPUCommandBuffer(upload_cmd), "failed to submit vertex buffer upload command")
-	sdl.ReleaseGPUTransferBuffer(platform.renderer.device, vert_transfer)
+	assert(sdl.SubmitGPUCommandBuffer(upload_cmd), "failed to submit GPU buffer upload command")
+	sdl.ReleaseGPUTransferBuffer(platform.renderer.device, transfer)
 
-	return vertex_buffer
+	return buffer
 }
 
 renderer_release_vertex_buffer :: proc(buf: ^sdl.GPUBuffer) {
@@ -405,11 +465,13 @@ renderer_release_vertex_buffer :: proc(buf: ^sdl.GPUBuffer) {
 
 @(private = "file")
 create_mesh_pipeline :: proc(vertex_shader, fragment_shader: ^sdl.GPUShader) -> ^sdl.GPUGraphicsPipeline {
-	vert_buf_descs := [?]sdl.GPUVertexBufferDescription{{slot = 0, pitch = size_of(Mesh_Vertex), input_rate = .VERTEX}}
+	vert_buf_descs := [?]sdl.GPUVertexBufferDescription {
+		{slot = 0, pitch = size_of(Model_Vertex), input_rate = .VERTEX},
+	}
 	vert_attrs := [?]sdl.GPUVertexAttribute {
-		{location = 0, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, position))},
-		{location = 1, buffer_slot = 0, format = .FLOAT2, offset = u32(offset_of(Mesh_Vertex, uv))},
-		{location = 2, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Mesh_Vertex, normal))},
+		{location = 0, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Model_Vertex, position))},
+		{location = 1, buffer_slot = 0, format = .FLOAT2, offset = u32(offset_of(Model_Vertex, uv))},
+		{location = 2, buffer_slot = 0, format = .FLOAT3, offset = u32(offset_of(Model_Vertex, normal))},
 	}
 	color_target_descs := [?]sdl.GPUColorTargetDescription{{format = platform.renderer.swapchain_format}}
 
