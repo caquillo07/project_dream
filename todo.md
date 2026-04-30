@@ -138,8 +138,9 @@ so it can be swapped later. Load with temp allocator, copy to our structs on per
 - [x] Bind correct texture per material when drawing (per-mesh loop)
 - [x] Fragment shader: sample texture * color_tint (via Mesh_Uniforms, pushed to both vert + frag)
 - [x] Store metallic_factor, roughness_factor in material (not used in shader yet)
-- [ ] Handle models with no texture (use white 1x1 fallback texture)
-- [ ] unload_model proc (release GPU buffers + textures)
+- [x] Handle models with no texture (use white 1x1 fallback texture on Render_State)
+- [x] unload_model proc (release GPU buffers + textures, nil-gated)
+- [x] Linear sampler for 3D models (linear_repeat_sampler, nearest stays for pixel art/ground)
 
 #### 6D — Multiple Instances + Entity Integration
 - [ ] Asset cache: loaded models stored by path, load once reference many
@@ -148,7 +149,6 @@ so it can be swapped later. Load with temp allocator, copy to our structs on per
 - [ ] Multiple entities sharing same model, different world transforms
 - [ ] Place several instances in the world (e.g. 3-4 trees at different positions)
 - [ ] Draw loop: iterate entities, skip .None, draw sprite or model based on kind
-- [ ] Linear sampler for 3D models (nearest is for pixel art sprites)
 
 #### Design Notes (for future phases, DO NOT implement now)
 - **Lighting:** Will need reworked Mesh_Uniforms with sun/point/spot light data and updated

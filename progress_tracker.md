@@ -35,7 +35,12 @@ Newest entries first.
 - Odin defer is block-scoped (not function-scoped like Go) — caused use-after-free in switch/case
 - Adding fields to uniform struct requires updating ALL draw calls using it
 
-**Remaining:** unload_model, white fallback texture, entity integration (6D)
+**Cleanup:**
+- `unload_model` — releases GPU buffers + textures, nil-gated
+- White 1x1 fallback texture on Render_State — untextured models render as color_tint
+- Linear repeat sampler for 3D models (nearest stays for pixel art sprites + ground)
+
+**Remaining:** 6D — entity integration + multiple instances
 
 **Key files:** src/model.odin, src/renderer.odin, src/main.odin, shaders/mesh.vert.glsl, shaders/mesh.frag.glsl
 
