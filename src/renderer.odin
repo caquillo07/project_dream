@@ -7,8 +7,6 @@ import "core:image"
 import "core:image/jpeg"
 import "core:image/png"
 import "core:log"
-import "core:math"
-import "core:math/linalg"
 import "core:mem"
 import "core:os"
 import filepath "core:path/filepath"
@@ -29,6 +27,7 @@ Render_State :: struct {
 	window:                 ^sdl.Window,
 	pipelines:              [Pipeline_Kind]^sdl.GPUGraphicsPipeline,
 	depth_texture:          ^sdl.GPUTexture,
+	fallback_texture:       Texture, // used when materials dont have a texture
 	nearest_repeat_sampler: ^sdl.GPUSampler, // NEAREST+REPEAT (meshes)
 	nearest_clamp_sampler:  ^sdl.GPUSampler, // NEAREST+CLAMP (sprites)
 	swapchain_format:       sdl.GPUTextureFormat,
@@ -87,6 +86,9 @@ init_renderer :: proc() {
 		platform.renderer.window,
 	)
 	log.infof("using swapchain format: %v", platform.renderer.swapchain_format)
+
+	// fallback white texture
+	platform.renderer.fallback_texture = load_texture_from_pixels(1, 1, []byte{255, 255, 255, 255})
 
 	// Depth buffer
 	platform.renderer.depth_texture = sdl.CreateGPUTexture(
@@ -188,6 +190,7 @@ deinit_renderer :: proc() {
 	sdl.ReleaseGPUSampler(platform.renderer.device, platform.renderer.nearest_clamp_sampler)
 	sdl.ReleaseGPUSampler(platform.renderer.device, platform.renderer.nearest_repeat_sampler)
 	sdl.ReleaseGPUTexture(platform.renderer.device, platform.renderer.depth_texture)
+	unload_texture(platform.renderer.fallback_texture)
 	sdl.DestroyGPUDevice(platform.renderer.device)
 	sdl.DestroyWindow(platform.renderer.window)
 	ShaderCross_Quit()

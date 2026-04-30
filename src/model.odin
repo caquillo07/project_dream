@@ -223,7 +223,23 @@ load_model_from_file :: proc(path: string) -> (Model, bool) {
 	return m, true
 }
 
-// todo(hector) - this is a get aroundt he fact that gltf2.odin does not support
+unload_model :: proc(model: ^Model) {
+	for &mesh in model.meshes {
+		if mesh.vertex_buffer != nil {
+			sdl.ReleaseGPUBuffer(platform.renderer.device, mesh.vertex_buffer)
+		}
+		if mesh.index_buffer != nil {
+			sdl.ReleaseGPUBuffer(platform.renderer.device, mesh.index_buffer)
+		}
+	}
+	for &mat in model.materials {
+		if mat.base_color_texture.sdl_texture != nil {
+			unload_texture(mat.base_color_texture)
+		}
+	}
+}
+
+// todo(hector) - this is a get around the fact that gltf2.odin does not support
 //  strides... should probably upstream this at some point?
 
 // Read accessor data from glTF buffer, handling byte_stride.

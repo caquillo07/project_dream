@@ -124,6 +124,7 @@ main :: proc() {
 	// loading a model
 	bat_model, bat_model_ok := load_model("assets/models/animated_halloween_bat.glb")
 	assert(bat_model_ok, "failed to load bat model")
+	defer unload_model(&bat_model)
 
 	// Title bar timing display — sampled every 0.5s
 	TITLE_UPDATE_INTERVAL :: 0.5
@@ -349,21 +350,20 @@ main :: proc() {
 			sdl.PushGPUVertexUniformData(cmd, 0, &mesh_uniforms, size_of(Mesh_Uniforms))
 			sdl.PushGPUFragmentUniformData(cmd, 0, &mesh_uniforms, size_of(Mesh_Uniforms))
 
-			if material.base_color_texture.sdl_texture != nil {
-				material_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
-					{
-						texture = material.base_color_texture.sdl_texture,
-						sampler = platform.renderer.nearest_repeat_sampler,
-					},
-				}
-
-				sdl.BindGPUFragmentSamplers(
-					render_pass,
-					0,
-					raw_data(&material_sampler_bindings),
-					len(material_sampler_bindings),
-				)
+			texture := material.base_color_texture.sdl_texture
+			if texture == nil {
+				texture = platform.renderer.fallback_texture.sdl_texture
 			}
+			material_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
+				{texture = texture, sampler = platform.renderer.nearest_repeat_sampler},
+			}
+
+			sdl.BindGPUFragmentSamplers(
+				render_pass,
+				0,
+				raw_data(&material_sampler_bindings),
+				len(material_sampler_bindings),
+			)
 			sdl.BindGPUVertexBuffers(render_pass, 0, &sdl.GPUBufferBinding{buffer = mesh.vertex_buffer}, 1)
 			sdl.BindGPUIndexBuffer(render_pass, sdl.GPUBufferBinding{buffer = mesh.index_buffer}, ._32BIT)
 			sdl.DrawGPUIndexedPrimitives(render_pass, u32(len(mesh.indices)), 1, 0, 0, 0)
