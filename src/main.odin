@@ -355,7 +355,7 @@ main :: proc() {
 				texture = platform.renderer.fallback_texture.sdl_texture
 			}
 			material_sampler_bindings := [?]sdl.GPUTextureSamplerBinding {
-				{texture = texture, sampler = platform.renderer.nearest_repeat_sampler},
+				{texture = texture, sampler = platform.renderer.linear_repeat_sampler},
 			}
 
 			sdl.BindGPUFragmentSamplers(

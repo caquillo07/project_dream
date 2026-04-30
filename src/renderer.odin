@@ -28,8 +28,9 @@ Render_State :: struct {
 	pipelines:              [Pipeline_Kind]^sdl.GPUGraphicsPipeline,
 	depth_texture:          ^sdl.GPUTexture,
 	fallback_texture:       Texture, // used when materials dont have a texture
-	nearest_repeat_sampler: ^sdl.GPUSampler, // NEAREST+REPEAT (meshes)
-	nearest_clamp_sampler:  ^sdl.GPUSampler, // NEAREST+CLAMP (sprites)
+	nearest_repeat_sampler: ^sdl.GPUSampler, // pixel art, checkerboard, procedural textures
+	nearest_clamp_sampler:  ^sdl.GPUSampler, // sprite sheets (no edge bleed)
+	linear_repeat_sampler:  ^sdl.GPUSampler, // 3D model textures
 	swapchain_format:       sdl.GPUTextureFormat,
 }
 
@@ -133,6 +134,19 @@ init_renderer :: proc() {
 		log_sdl_fatal("Failed to create sprite sampler")
 	}
 
+	platform.renderer.linear_repeat_sampler = sdl.CreateGPUSampler(
+		platform.renderer.device,
+		sdl.GPUSamplerCreateInfo {
+			min_filter = .LINEAR,
+			mag_filter = .LINEAR,
+			address_mode_u = .REPEAT,
+			address_mode_v = .REPEAT,
+		},
+	)
+	if platform.renderer.linear_repeat_sampler == nil {
+		log_sdl_fatal("Failed to create linear/repeat sampler")
+	}
+
 	// Pipelines
 
 	// Load shaders (into scratch — bytes only needed until ShaderCross compiles them)
@@ -187,6 +201,7 @@ deinit_renderer :: proc() {
 		sdl.ReleaseGPUGraphicsPipeline(platform.renderer.device, pipeline)
 	}
 
+	sdl.ReleaseGPUSampler(platform.renderer.device, platform.renderer.linear_repeat_sampler)
 	sdl.ReleaseGPUSampler(platform.renderer.device, platform.renderer.nearest_clamp_sampler)
 	sdl.ReleaseGPUSampler(platform.renderer.device, platform.renderer.nearest_repeat_sampler)
 	sdl.ReleaseGPUTexture(platform.renderer.device, platform.renderer.depth_texture)
