@@ -5,7 +5,6 @@ import "core:path/filepath"
 import sdl "vendor:sdl3"
 
 import gltf "../ext-libs/glTF2"
-import fmt "core:fmt"
 import log "core:log"
 
 //  meshes:        [body_mesh, armor_mesh, belt_mesh, eyes_mesh]
@@ -132,29 +131,26 @@ load_model_from_file :: proc(path: string) -> (Model, bool) {
 					vertex.normal = {0, 1, 0}
 				}
 				if len(uvs) > 0 {
-					// glTF defines UV origin at top-left, but the GPU
-					// (OpenGL/Vulkan convention that SDL3 GPU follows) expects
-					// bottom-left, so we flip them for concistency
-					vertex.uv = Vec2{uvs[i].x, uvs[i].y} // flip the UV
+					vertex.uv = Vec2{uvs[i].x, uvs[i].y}
 				}
 
 				// for static models, {1,0,0,0} means 100% influced by 0
 				vertices[i].bone_weights = {1, 0, 0, 0} // todo for animated models
 			}
 
-			// indicies
+			// indices
 			indices: []u32
-			if indicies_accessor_index, has_indices := primitive.indices.?; has_indices {
-				accessor := model_data.accessors[indicies_accessor_index]
+			if indices_accessor_index, has_indices := primitive.indices.?; has_indices {
+				accessor := model_data.accessors[indices_accessor_index]
 				#partial switch accessor.component_type {
 				case gltf.Component_Type.Unsigned_Short:
-					raw_indices := read_gltf2_accessor(u16, model_data, indicies_accessor_index)
+					raw_indices := read_gltf2_accessor(u16, model_data, indices_accessor_index)
 					indices = make([]u32, len(raw_indices))
 					for i in 0 ..< len(raw_indices) {
 						indices[i] = u32(raw_indices[i])
 					}
 				case gltf.Component_Type.Unsigned_Int:
-					indices = read_gltf2_accessor(u32, model_data, indicies_accessor_index)
+					indices = read_gltf2_accessor(u32, model_data, indices_accessor_index)
 				case:
 					log.fatal("unsupported glTF2 component type %v", accessor.component_type)
 					panic("unimplemented")
@@ -179,7 +175,7 @@ load_model_from_file :: proc(path: string) -> (Model, bool) {
 		model_material.color_tint = {1, 1, 1, 1} // default white
 
 		if metallic_roughness, has_mr := gltf_material.metallic_roughness.?; has_mr {
-			model_material.color_tint = metallic_roughness.base_color_factor[0]
+			model_material.color_tint = metallic_roughness.base_color_factor
 			model_material.metallic_factor = metallic_roughness.metallic_factor
 			model_material.roughness_factor = metallic_roughness.roughness_factor
 

@@ -344,7 +344,7 @@ main :: proc() {
 			mesh_uniforms := Mesh_Uniforms {
 				view_proj  = platform.game.view_proj,
 				model      = model_matrix,
-				color_tint = material.color_tint * {0.5, 1, 0.5, 0.5},
+				color_tint = material.color_tint,
 			}
 			sdl.PushGPUVertexUniformData(cmd, 0, &mesh_uniforms, size_of(Mesh_Uniforms))
 			sdl.PushGPUFragmentUniformData(cmd, 0, &mesh_uniforms, size_of(Mesh_Uniforms))

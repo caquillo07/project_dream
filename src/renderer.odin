@@ -40,7 +40,7 @@ Texture :: struct {
 	height:      u32,
 }
 
-Imagine_Type :: enum {
+Image_Type :: enum {
 	PNG,
 	JPEG,
 }
@@ -318,7 +318,7 @@ load_texture :: proc {
 
 load_texture_from_file :: proc(path: string) -> Texture {
 	file_ext := strings.to_lower(filepath.ext(path), context.temp_allocator)
-	image_type: Imagine_Type
+	image_type: Image_Type
 	if file_ext == ".png" {
 		image_type = .PNG
 	} else if file_ext == ".jpg" || file_ext == ".jpeg" {
@@ -332,12 +332,10 @@ load_texture_from_file :: proc(path: string) -> Texture {
 		log.errorf("Failed to read file: %s", path)
 		panic("texture file read failed")
 	}
-	buf_len := len(buf)
-	_ = buf_len
 	return load_texture_from_memory(buf, image_type)
 }
 
-load_texture_from_memory :: proc(buf: []byte, image_type: Imagine_Type = .PNG) -> Texture {
+load_texture_from_memory :: proc(buf: []byte, image_type: Image_Type = .PNG) -> Texture {
 	img: ^image.Image
 	err: image.Error
 	switch image_type {
@@ -345,12 +343,6 @@ load_texture_from_memory :: proc(buf: []byte, image_type: Imagine_Type = .PNG) -
 		img, err = png.load_from_bytes(buf, {png.Options.alpha_add_if_missing}, context.temp_allocator)
 	case .JPEG:
 		img, err = jpeg.load_from_bytes(buf, {jpeg.Options.alpha_add_if_missing}, context.temp_allocator)
-	}
-	defer if image_type == .PNG {
-		png.destroy(img)
-	}
-	defer if image_type == .JPEG {
-		jpeg.destroy(img)
 	}
 	if err != nil {
 		log.errorf("failed to decode %v: %v", image_type, err)

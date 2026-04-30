@@ -14,7 +14,7 @@ layout (location = 0) out vec2 v_uv;
 layout (set = 1, binding = 0) uniform Uniforms {
     mat4 u_view_proj;
     mat4 u_model;
-    vec4 u_tint_color;
+    vec4 u_color_tint;
 };
 
 void main() {
